@@ -6,9 +6,7 @@ This assumes you are using a computer on the 136.244.224.xxx network.
 
 import argparse
 import csv
-import shlex
-import shutil
-import subprocess
+import paramiko
 from pathlib import Path
 
 WORKER_FILE = Path(__file__).with_name("workers.csv")
@@ -30,28 +28,38 @@ def process(value):
     return (value or "").strip()
 
 def ssh_check(host, user, password):
-    """Run the SSH check in the specified host"""
+    """Run the SSH check"""
+    try:
+        # Create the SSH client
+        ssh = paramiko.SSHClient()
 
-    sshpass = shutil.which("sshpass")  # Get the sshpass
+        # Automatically add the server's host key
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-    # The ssh command to connect to the specific host using the given password and username
-    cmd_parts = [
-        shlex.quote(sshpass),
-        "-p",
-        shlex.quote(password),
-        "ssh",
-        "-oStrictHostKeyChecking=no",  # Automatically accept it
-        "-oUserKnownHostsFile=/dev/null",  # Create a new list of connections
-        "-oConnectTimeout=5",  # 5-second timeout for the connection
-        f"{shlex.quote(user)}@{shlex.quote(host)}",  # user@136.244.224.___
-        "echo ok"]  # If it runs successfully print ok
-    
-    # Merge and run the command
-    cmd = " ".join(cmd_parts)
-    result = subprocess.run(cmd, shell=True, text=True, capture_output=True)
-    if result.returncode == 0:
-        return "ok", ""
-    return "failed", f"\n[stderr]\n{result.stderr.strip()}\n\n[stdout]\n{result.stdout.strip()}"  # Return the stderr/stdout as the error message
+        # Connect to the remote server using the given username and password
+        ssh.connect(host, username=user, password=password, timeout=5)
+
+        # Run a simple command to check if the SSH connection is established
+        stdin, stdout, stderr = ssh.exec_command("echo ok")
+
+        # Read the output
+        result = stdout.read().decode().strip()
+
+        # Close the connection
+        ssh.close()
+
+        # If the result is 'ok', the connection is successful
+        if result == "ok":
+            return "ok", ""
+        else:
+            return "failed", f"Unexpected output: {result}"
+
+    except paramiko.AuthenticationException:
+        return "failed", "Authentication failed."
+    except paramiko.SSHException as e:
+        return "failed", f"SSH connection failed: {str(e)}"
+    except Exception as e:
+        return "failed", f"Error: {str(e)}"
 
 def ping_workers():
     """Go through each available worker and ping them to see if they are available or not"""
@@ -66,7 +74,7 @@ def ping_workers():
     counts = {"ok": 0, "failed": 0}  # Success / Non-Success counts
     messages = []  # Error details from the runs
     
-    print(f"{'ROOM':<5} {'HOSTNAME':<20} {'IP-ADDRESS':<15} {'MONITOR':<15} {'SUCCESS'}")
+    print(f"{'ROOM':<5} {'HOSTNAME':<30} {'IP-ADDRESS':<20} {'MONITOR':<15} {'SUCCESS'}")
 
     for worker in load_workers(WORKER_FILE):
         # Get the worker details
@@ -84,7 +92,7 @@ def ping_workers():
         counts[status] += 1
         success = {"ok": "YES", "failed": "NO"}.get(status)
         
-        print(f"{room:<5} {hostname:<20} {host_ip:<15} {monitor:<15} {success}")
+        print(f"{room:<5} {hostname:<30} {host_ip:<20} {monitor:<15} {success}")
         
         # If it errored, add the error message
         if details:
