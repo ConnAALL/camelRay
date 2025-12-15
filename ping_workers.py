@@ -54,6 +54,7 @@ def ssh_check(host, user, password):
     return "failed", f"\n[stderr]\n{result.stderr.strip()}\n\n[stdout]\n{result.stdout.strip()}"  # Return the stderr/stdout as the error message
 
 def ping_workers():
+    """Go through each available worker and ping them to see if they are available or not"""
     args = parse_args()
 
     # If the workers.csv does not exist, raise an error
