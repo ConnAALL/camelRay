@@ -52,7 +52,8 @@ def process(value):
     return (value or "").strip()
 
 def ssh_check(host, user, password):
-    """Run the SSH check"""
+    """Run the SSH check and get the CPU core count if possible."""
+    cores = "unknown"
     try:
         # Create the SSH client
         ssh = paramiko.SSHClient()
@@ -69,21 +70,28 @@ def ssh_check(host, user, password):
         # Read the output
         result = stdout.read().decode().strip()
 
+        # Fetch CPU core count when the ping succeeds
+        if result == "ok":
+            _, stdout, _ = ssh.exec_command("nproc --all")
+            cores_output = stdout.read().decode().strip()
+            if cores_output.isdigit():
+                cores = cores_output
+
         # Close the connection
         ssh.close()
 
         # If the result is 'ok', the connection is successful
         if result == "ok":
-            return "ok", ""
+            return "ok", "", cores
         else:
-            return "failed", f"Unexpected output: {result}"
+            return "failed", f"Unexpected output: {result}", cores
 
     except paramiko.AuthenticationException:
-        return "failed", "Authentication failed."
+        return "failed", "Authentication failed.", cores
     except paramiko.SSHException as e:
-        return "failed", f"SSH connection failed: {str(e)}"
+        return "failed", f"SSH connection failed: {str(e)}", cores
     except Exception as e:
-        return "failed", f"Error: {str(e)}"
+        return "failed", f"Error: {str(e)}", cores
 
 def ping_workers():
     """Go through each available worker and ping them to see if they are available or not"""
@@ -98,7 +106,7 @@ def ping_workers():
     counts = {"ok": 0, "failed": 0}  # Success / Non-Success counts
     messages = []  # Error details from the runs
     
-    print(f"{'ROOM':<5} {'HOSTNAME':<30} {'IP-ADDRESS':<20} {'MONITOR':<15} {'SUCCESS'}")
+    print(f"{'ROOM':<5} {'HOSTNAME':<30} {'IP-ADDRESS':<20} {'MONITOR':<15} {'CORES':<10} {'SUCCESS'}")
 
     for worker in load_workers(WORKER_FILE):
         # Get the worker details
@@ -110,13 +118,13 @@ def ping_workers():
         password = process(worker.get("password")) or args.password
 
         # Ping the ssh in the specific host
-        status, details = ssh_check(host_ip, username, password)
+        status, details, cores = ssh_check(host_ip, username, password)
         
         # Keep track of how we had been doing
         counts[status] += 1
         success = {"ok": "YES", "failed": "NO"}.get(status)
         
-        print(f"{room:<5} {hostname:<30} {host_ip:<20} {monitor:<15} {success}")
+        print(f"{room:<5} {hostname:<30} {host_ip:<20} {monitor:<15} {cores:<10} {success}")
         
         # If it errored, add the error message
         if details:
