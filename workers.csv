@@ -38,6 +38,6 @@ room,hostname,ip-address,monitor-name,username,password,env
 210,NL210-Lin8003,136.244.224.119,turkey,,,
 209,NL209-Lin013,136.244.224.136,mega_knight,,,
 209,NL216-Lin110088,136.244.224.33,bonfire,,,
-209,usr-Precision-Tower-7910,136.244.224.134,roman,usr,password,
+209,usr-Precision-Tower-7910,136.244.224.134,roman,usr,password,rayenv
 209,NL214-Lin7998,136.244.224.41,bandit,,,
 209,trx-TRX50-AERO-D,136.244.224.45,threadripper,trx,password,rayenv
