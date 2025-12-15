@@ -48,7 +48,7 @@ def load_workers(csv_path):
     with csv_path.open(newline="", encoding="utf-8") as file:
         return list(csv.DictReader(file))
     
-def process(value):
+def normalize(value):
     """Simple pre-processing of the worker information from the workers.csv file"""
     return (value or "").strip()
 
@@ -137,12 +137,12 @@ def ping_workers():
 
     for worker in load_workers(WORKER_FILE):
         # Get the worker details
-        room = process(worker.get("room"))
-        hostname = process(worker.get("hostname"))
-        host_ip = process(worker.get("ip-address"))
-        monitor = process(worker.get("monitor-name"))
-        username = process(worker.get("username")) or args.username
-        password = process(worker.get("password")) or args.password
+        room = normalize(worker.get("room"))
+        hostname = normalize(worker.get("hostname"))
+        host_ip = normalize(worker.get("ip-address"))
+        monitor = normalize(worker.get("monitor-name"))
+        username = normalize(worker.get("username")) or args.username
+        password = normalize(worker.get("password")) or args.password
 
         # Ping the ssh in the specific host
         status, details, cores, gpu = ssh_check(host_ip, username, password)
