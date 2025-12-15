@@ -29,7 +29,7 @@ def process(value):
     """Simple pre-processing of the worker information from the workers.csv file"""
     return (value or "").strip()
 
-def ssh_check(host: str, user: str, password: str) -> tuple[str, str]:
+def ssh_check(host, user, password):
     """Run the SSH check in the specified host"""
 
     sshpass = shutil.which("sshpass")  # Get the sshpass
