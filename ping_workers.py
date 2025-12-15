@@ -22,8 +22,8 @@ def parse_args():
 
 def load_workers(csv_path):
     """Load the workers in the csv file into the dictionary"""
-    with csv_path.open(newline="", encoding="utf-8") as fp:
-        return list(csv.DictReader(fp))
+    with csv_path.open(newline="", encoding="utf-8") as file:
+        return list(csv.DictReader(file))
     
 def process(value):
     """Simple pre-processing of the worker information from the workers.csv file"""
@@ -53,7 +53,7 @@ def ssh_check(host: str, user: str, password: str) -> tuple[str, str]:
         return "ok", ""
     return "failed", f"\n[stderr]\n{result.stderr.strip()}\n\n[stdout]\n{result.stdout.strip()}"  # Return the stderr/stdout as the error message
 
-def main():
+def ping_workers():
     args = parse_args()
 
     # If the workers.csv does not exist, raise an error
@@ -97,4 +97,4 @@ def main():
             print(f"--> {message}")
 
 if __name__ == "__main__":
-    main()
+    ping_workers()
