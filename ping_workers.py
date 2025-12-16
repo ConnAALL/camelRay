@@ -73,7 +73,6 @@ def process_gpu_output(out):
         text = text[:45] + "..."
     return (out, text)
 
-
 def ssh_check(host, user, password):
     """Run the SSH check and get hardware information if possible."""
     cores = "unknown"
