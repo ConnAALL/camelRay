@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 import paramiko
 from ping_workers import WORKER_FILE, load_workers, normalize, parse_args
-from ray_setup import wrap_with_conda_env, run_remote
+from ray_setup import wrap_with_conda_env
 
 def short_text(value, max_len):
     text = (value or "").strip()
