@@ -61,10 +61,10 @@ def ray_stop():
     messages = []
 
     rows = []
-    headers = ["room", "hostname", "ip-address", "monitor-name", "STOPPED", "details"]
+    headers = ["room", "hostname", "ip-address", "monitor-name", "STOPPED"]
     rows.append(headers)
 
-    print(f"{'ROOM':<5} {'HOSTNAME':<30} {'IP-ADDRESS':<18} {'MONITOR':<15} {'STOPPED':<8} DETAILS")
+    print(f"{'ROOM':<5} {'HOSTNAME':<30} {'IP-ADDRESS':<18} {'MONITOR':<15} {'STOPPED':<8}")
 
     for worker in load_workers(WORKER_FILE):
         room = normalize(worker.get("room"))
@@ -83,8 +83,8 @@ def ray_stop():
         counts[status] += 1
 
         stopped = "YES" if status == "ok" else "NO"
-        print(f"{room:<5} {hostname:<30} {host_ip:<18} {monitor:<15} {stopped:<8} {details}")
-        rows.append([room, hostname, host_ip, monitor, stopped, details])
+        print(f"{room:<5} {hostname:<30} {host_ip:<18} {monitor:<15} {stopped:<8}")
+        rows.append([room, hostname, host_ip, monitor, stopped])
 
         if status != "ok":
             messages.append(f"{hostname or host_ip}: {details}")
