@@ -9,6 +9,8 @@ import termios
 import tty
 import socket
 import shlex
+import platform
+import re
 
 from rich.console import Console
 from rich.prompt import Prompt
@@ -50,12 +52,44 @@ def print_network_info():
     except Exception:
         host = "unknown"
 
-    ips = []
-    try:
-        out = subprocess.check_output(["hostname", "-I"], text=True).strip()
-        ips = [ip for ip in out.split() if ip]
-    except Exception:
+    def _get_ips():
+        system = platform.system().lower()
         ips = []
+
+        if system == "linux":
+            try:
+                out = subprocess.check_output(["hostname", "-I"], text=True).strip()
+                ips = [ip for ip in out.split() if ip]
+            except Exception:
+                ips = []
+        elif system == "darwin":
+            # macOS doesn't support `hostname -I`. Parse ifconfig output.
+            try:
+                out = subprocess.check_output(["ifconfig"], text=True, stderr=subprocess.STDOUT)
+                # capture inet IPv4 addresses, excluding loopback
+                ips = [m.group(1) for m in re.finditer(r"\binet\s+(\d+\.\d+\.\d+\.\d+)\b", out)]
+                ips = [ip for ip in ips if ip != "127.0.0.1"]
+            except Exception:
+                ips = []
+        elif system == "windows":
+            # Parse ipconfig output for IPv4 addresses.
+            try:
+                out = subprocess.check_output(["ipconfig"], text=True, stderr=subprocess.STDOUT)
+                ips = [m.group(1) for m in re.finditer(r"IPv4 Address[^\d]*(\d+\.\d+\.\d+\.\d+)", out)]
+                ips = [ip for ip in ips if ip != "127.0.0.1"]
+            except Exception:
+                ips = []
+        else:
+            # Fallback: best-effort from hostname resolution.
+            try:
+                infos = socket.getaddrinfo(host, None)
+                ips = list({info[4][0] for info in infos if info and info[4]})
+            except Exception:
+                ips = []
+
+        return ips
+
+    ips = _get_ips()
 
     console.print(f"[dim]Host:[/dim] {host}")
     console.print(f"[dim]IPs:[/dim]  {', '.join(ips) if ips else 'unknown'}")
