@@ -1,3 +1,13 @@
+"""
+Script that runs a diagnosis of an existing Ray cluster.
+
+It goes through each worker in the workers.csv file if:
+ - They are reachable via SSH
+ - They have Ray installed (and the ray version)
+ - They are running Ray
+ - They are running as a head node or a worker node
+"""
+
 import os
 import shlex
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -8,6 +18,7 @@ from rich.console import Console
 from rich.table import Table
 
 def short_text(value, max_len):
+    """Shorten the text to the maximum length"""
     text = (value or "").strip()
     if len(text) <= max_len:
         return text
@@ -16,6 +27,7 @@ def short_text(value, max_len):
     return text[: max_len - 3] + "..."
 
 def run_remote(ssh, command, timeout=10):
+    """Run a command on the remote host"""
     remote_cmd = f"bash -lc {shlex.quote(command)}"
     _, stdout, stderr = ssh.exec_command(remote_cmd, get_pty=False, timeout=timeout)
     out = stdout.read().decode(errors="replace")
@@ -115,7 +127,7 @@ def diagnosis_one_worker(worker: dict, default_username: str, default_password: 
 
 def print_results_table(results: list[dict]):
     """Print results as a Rich table."""
-    table = Table(title=f"Ray diagnosis ({len(results)} workers)")
+    table = Table(title=None)
     table.add_column("ROOM", style="cyan", no_wrap=True)
     table.add_column("HOSTNAME", style="white")
     table.add_column("IP-ADDRESS", style="white")
@@ -129,10 +141,6 @@ def print_results_table(results: list[dict]):
     for r in results:
         ver_disp = short_text(r["ray_version"] or "-", 12)
 
-        # Row coloring:
-        # - Ray status unknown => yellow (even if SSH failed)
-        # - Ray not running => red
-        # - Otherwise: SSH failed => red, else green
         if r["ray_running"] == "unknown":
             style = "yellow"
         elif r["ray_running"] == "NO":
