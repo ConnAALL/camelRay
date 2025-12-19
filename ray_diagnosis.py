@@ -6,6 +6,7 @@ It goes through each worker in the workers.csv file if:
  - They have Ray installed (and the ray version)
  - They are running Ray
  - They are running as a head node or a worker node
+ 
 """
 
 import os
