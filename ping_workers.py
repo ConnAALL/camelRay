@@ -6,9 +6,12 @@ This assumes you are using a computer on the 136.244.224.xxx network.
 
 import argparse
 import csv
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import paramiko
-from datetime import datetime
 from pathlib import Path
+from rich.console import Console
+from rich.table import Table
 
 WORKER_FILE = Path(__file__).with_name("workers.csv")
 ENV_FILE = Path(__file__).with_name(".env")
@@ -35,7 +38,6 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Sweep through all the workers in the workers.csv file to ensure that they are reachable")
     parser.add_argument("--username", help="SSH username", default=env_defaults.get("USERNAME"))
     parser.add_argument("--password", help="SSH password", default=env_defaults.get("PASSWORD"))
-    parser.add_argument("--workers",help=("Comma-separated selectors to target specific workers by IP address, hostname, or monitor-name.\nExample: --workers 136.244.224.165,rat,NL214-Lin11171" ), default="")
     args = parser.parse_args()
 
     missing = [field for field in ("username", "password") if not getattr(args, field)]
@@ -56,7 +58,7 @@ def normalize(value):
 def process_gpu_output(out):
     text = (out or "").strip()
     if not text:
-        return ""
+        return ("", "")
     
     # use split to get everything after 'controller:', if present
     split_key = "controller:"
@@ -119,59 +121,119 @@ def ssh_check(host, user, password):
     except Exception as e:
         return "failed", f"Error: {str(e)}", cores, gpu
 
+def ping_one_worker(worker: dict, default_username: str, default_password: str) -> dict:
+    """
+    Worker function (picklable) to run in a separate process.
+    Returns a dict with normalized fields + ssh check outputs.
+    """
+    room = normalize(worker.get("room"))
+    hostname = normalize(worker.get("hostname"))
+    host_ip = normalize(worker.get("ip-address"))
+    monitor = normalize(worker.get("monitor-name"))
+    username = normalize(worker.get("username")) or default_username
+    password = normalize(worker.get("password")) or default_password
+
+    status, details, cores, gpu = ssh_check(host_ip, username, password)
+    gpu_raw, gpu_short = gpu if isinstance(gpu, tuple) and len(gpu) == 2 else ("", "")
+    return {
+        "room": room,
+        "hostname": hostname,
+        "ip": host_ip,
+        "monitor": monitor,
+        "status": status,
+        "details": details,
+        "cores": cores,
+        "gpu_raw": gpu_raw,
+        "gpu_short": gpu_short,
+    }
+
+def print_results_table(results: list[dict]):
+    """Print results as a Rich table."""
+    table = Table(title=f"Ping results ({len(results)} workers)")
+    table.add_column("ROOM", style="cyan", no_wrap=True)
+    table.add_column("HOSTNAME", style="white")
+    table.add_column("IP-ADDRESS", style="white")
+    table.add_column("MONITOR", style="white")
+    table.add_column("CORES", justify="right")
+    table.add_column("GPU", style="white")
+    table.add_column("SUCCESS", justify="center")
+
+    for r in results:
+        success = "YES" if r["status"] == "ok" else "NO"
+        style = "green" if r["status"] == "ok" else "red"
+        table.add_row(
+            r["room"],
+            r["hostname"],
+            r["ip"],
+            r["monitor"],
+            str(r["cores"]),
+            r["gpu_short"],
+            success,
+            style=style,
+        )
+
+    Console().print(table)
+
 def ping_workers():
     """Go through each available worker and ping them to see if they are available or not"""
     args = parse_args()
 
     # If the workers.csv does not exist, raise an error
     if not WORKER_FILE.exists():
-        raise(f"CSV not found: {WORKER_FILE}")
+        raise FileNotFoundError(f"CSV not found: {WORKER_FILE}")
 
-    print(f"Scanning workers from {WORKER_FILE}")
+    all_workers = load_workers(WORKER_FILE)
 
-    counts = {"ok": 0, "failed": 0}  # Success / Non-Success counts
-    messages = []  # Error details from the runs
-    rows = []
-    headers = ["room","hostname","ip-address","monitor-name","cores","gpu","success"]
-    print(f"{'ROOM':<5} {'HOSTNAME':<30} {'IP-ADDRESS':<20} {'MONITOR':<15} {'CORES':<10} {'GPU':<50} {'SUCCESS'}")
+    cpu_count = os.cpu_count() or 1
+    procs_per_core = 3
+    max_procs = max(1, cpu_count * procs_per_core)
+    pool_size = min(len(all_workers), max_procs) if all_workers else 0
 
-    for worker in load_workers(WORKER_FILE):
-        # Get the worker details
-        room = normalize(worker.get("room"))
-        hostname = normalize(worker.get("hostname"))
-        host_ip = normalize(worker.get("ip-address"))
-        monitor = normalize(worker.get("monitor-name"))
-        username = normalize(worker.get("username")) or args.username
-        password = normalize(worker.get("password")) or args.password
+    results_by_idx: dict[int, dict] = {}
+    if pool_size == 0:
+        results: list[dict] = []
+    else:
+        with ProcessPoolExecutor(max_workers=pool_size) as executor:
+            futures = {
+                executor.submit(ping_one_worker, worker, args.username, args.password): idx
+                for idx, worker in enumerate(all_workers)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    results_by_idx[idx] = future.result()
+                except Exception as exc:
+                    w = all_workers[idx]
+                    results_by_idx[idx] = {
+                        "room": normalize(w.get("room")),
+                        "hostname": normalize(w.get("hostname")),
+                        "ip": normalize(w.get("ip-address")),
+                        "monitor": normalize(w.get("monitor-name")),
+                        "status": "failed",
+                        "details": f"Worker task crashed: {exc}",
+                        "cores": "unknown",
+                        "gpu_raw": "",
+                        "gpu_short": "",
+                    }
 
-        # Ping the ssh in the specific host
-        status, details, cores, gpu = ssh_check(host_ip, username, password)
-        
-        # Keep track of how we had been doing
-        counts[status] += 1
-        success = {"ok": "YES", "failed": "NO"}.get(status)
-        
-        print(f"{room:<5} {hostname:<30} {host_ip:<20} {monitor:<15} {cores:<10} {gpu[1]:<50} {success}")
-        rows.append([room,hostname,host_ip,monitor,cores,gpu[0],success])
-        
-        # If it errored, add the error message
-        if details:
-            messages.append(f"{hostname or host_ip}: {details}")
+        results = [results_by_idx[i] for i in range(len(all_workers))]
 
-    print(f"\n\n[SUMMARY] {counts['ok']} ok, {counts['failed']} failed, ")
+    print_results_table(results)
+
+    counts = {"ok": 0, "failed": 0}
+    messages = []
+
+    for r in results:
+        counts[r["status"]] += 1
+        if r["details"]:
+            messages.append(f"{r['hostname'] or r['ip']}: {r['details']}")
+
+    print(f"\n\n[SUMMARY] {counts['ok']} ok, {counts['failed']} failed")
     
     if messages:
         print("\nError Message:")
         for message in messages:
             print(f"--> {message}")
-
-    temp_dir = Path(__file__).with_name("temp")
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%y%m%d_%H%M%S")
-    log_path = temp_dir / f"{timestamp}_log.csv"
-    with log_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        writer.writerows(rows)
 
 if __name__ == "__main__":
     ping_workers()
