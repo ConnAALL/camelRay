@@ -10,6 +10,7 @@ import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import paramiko
 from pathlib import Path
+from dotenv import dotenv_values
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
@@ -19,19 +20,9 @@ ENV_FILE = Path(__file__).with_name(".env")  # File that has the credentials for
 
 def load_env_defaults():
     """Load username/password information from the .env file if it exists."""
-    env_data = {}
     if not ENV_FILE.exists():
-        return env_data
-
-    with ENV_FILE.open(encoding="utf-8") as env_file:
-        for raw_line in env_file:
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            env_data[key.strip()] = value.strip()
-
-    return env_data
+        return {}
+    return {k: (v or "") for k, v in (dotenv_values(str(ENV_FILE)) or {}).items()}
 
 def parse_args():
     """Parse the command-line arguments that are the username and the password of the user"""
