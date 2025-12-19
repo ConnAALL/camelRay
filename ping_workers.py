@@ -35,6 +35,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Sweep through all the workers in the workers.csv file to ensure that they are reachable")
     parser.add_argument("--username", help="SSH username", default=env_defaults.get("USERNAME"))
     parser.add_argument("--password", help="SSH password", default=env_defaults.get("PASSWORD"))
+    parser.add_argument("--workers",help=("Comma-separated selectors to target specific workers by IP address, hostname, or monitor-name.\nExample: --workers 136.244.224.165,rat,NL214-Lin11171" ), default="")
     args = parser.parse_args()
 
     missing = [field for field in ("username", "password") if not getattr(args, field)]

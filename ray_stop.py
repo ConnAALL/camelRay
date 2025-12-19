@@ -6,6 +6,26 @@ from ping_workers import WORKER_FILE, load_workers, normalize, parse_args
 from ray_setup import GRID_HEAD_IP, wrap_with_conda_env
 from ray_diagnosis import short_text, run_remote
 
+def parse_worker_ids(raw: str | None) -> set[str]:
+    """
+    Parse --workers value into a normalized, case-insensitive selector set.
+    Accepts comma-separated values; ignores empty segments.
+    """
+    text = normalize(raw)
+    if not text:
+        return set()
+    parts = [normalize(p) for p in text.split(",")]
+    return {p.lower() for p in parts if p}
+
+def match_workers(worker: dict, selectors_lc: set[str]) -> bool:
+    """Return True if worker matches any selector by ip-address, hostname, or monitor-name."""
+    if not selectors_lc:
+        return True
+    ip_addr = normalize(worker.get("ip-address")).lower()
+    hostname = normalize(worker.get("hostname")).lower()
+    monitor = normalize(worker.get("monitor-name")).lower()
+    return bool({ip_addr, hostname, monitor} & selectors_lc)
+
 def stop_ray(host, username, password, conda_env=None, timeout=20):
     """Connect to the hosts and stop the Ray cluster."""
     ssh = paramiko.SSHClient()
@@ -55,7 +75,12 @@ def ray_stop():
     if not WORKER_FILE.exists():
         raise FileNotFoundError(f"CSV not found: {WORKER_FILE}")
 
-    print(f"Stopping ray on workers from {WORKER_FILE}")
+    selectors_lc = parse_worker_ids(getattr(args, "workers", ""))
+    if selectors_lc:
+        print(f"Stopping ray on selected workers from {WORKER_FILE} (matched by ip/hostname/monitor-name)")
+        print(f"Selectors: {', '.join(sorted(selectors_lc))}")
+    else:
+        print(f"Stopping ray on workers from {WORKER_FILE}")
 
     counts = {"ok": 0, "failed": 0}
     messages = []
@@ -66,15 +91,20 @@ def ray_stop():
 
     print(f"{'ROOM':<5} {'HOSTNAME':<30} {'IP-ADDRESS':<18} {'MONITOR':<15} {'STOPPED':<8}")
 
+    selected = 0
     for worker in load_workers(WORKER_FILE):
         room = normalize(worker.get("room"))
         hostname = normalize(worker.get("hostname"))
         host_ip = normalize(worker.get("ip-address"))
         monitor = normalize(worker.get("monitor-name"))
 
+        if not match_workers(worker, selectors_lc):
+            continue
+
         if not host_ip or host_ip == GRID_HEAD_IP:
             continue
 
+        selected += 1
         username = normalize(worker.get("username")) or args.username
         password = normalize(worker.get("password")) or args.password
         conda_env = normalize(worker.get("env"))
@@ -88,6 +118,9 @@ def ray_stop():
 
         if status != "ok":
             messages.append(f"{hostname or host_ip}: {details}")
+
+    if selectors_lc and selected == 0:
+        raise SystemExit("No workers matched --workers selectors. Check workers.csv for ip-address / hostname / monitor-name values.")
 
     print(f"\n\n[SUMMARY] {counts['ok']} ok, {counts['failed']} failed")
     if messages:
