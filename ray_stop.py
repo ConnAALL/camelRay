@@ -1,10 +1,23 @@
 import csv
+import yaml
 from datetime import datetime
 from pathlib import Path
 import paramiko
 from ping_workers import WORKER_FILE, load_workers, normalize, parse_args
-from ray_setup import GRID_HEAD_IP, wrap_with_conda_env
+from ray_setup import wrap_with_conda_env
 from ray_diagnosis import short_text, run_remote
+
+CONFIG_FILE = Path(__file__).with_name("config.yaml")
+
+def get_grid_head_ip():
+    """Get GRID_HEAD_IP from config.yaml."""
+    if not CONFIG_FILE.exists():
+        raise FileNotFoundError(f"Config file not found: {CONFIG_FILE}")
+    
+    with CONFIG_FILE.open(encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    
+    return config.get("GRID_HEAD_IP")
 
 def parse_worker_ids(raw: str | None) -> set[str]:
     """
@@ -75,6 +88,7 @@ def ray_stop():
     if not WORKER_FILE.exists():
         raise FileNotFoundError(f"CSV not found: {WORKER_FILE}")
 
+    grid_head_ip = get_grid_head_ip()
     selectors_lc = parse_worker_ids(getattr(args, "workers", ""))
     if selectors_lc:
         print(f"Stopping ray on selected workers from {WORKER_FILE} (matched by ip/hostname/monitor-name)")
@@ -101,7 +115,7 @@ def ray_stop():
         if not match_workers(worker, selectors_lc):
             continue
 
-        if not host_ip or host_ip == GRID_HEAD_IP:
+        if not host_ip or host_ip == grid_head_ip:
             continue
 
         selected += 1

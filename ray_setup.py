@@ -2,6 +2,7 @@ import argparse
 import paramiko
 import shlex
 import sys
+import yaml
 from pathlib import Path
 from ping_workers import load_env_defaults, normalize, load_workers, WORKER_FILE, ENV_FILE
 from rich.console import Console
@@ -28,8 +29,31 @@ def warning(msg: str):
 def error(msg: str):
     console.print(f"[error]{msg}[/error]")
 
-DEFAULT_HEAD_IP = "136.244.224.234"  # This is the IP of the machine that will be the head of the ray cluster
-GRID_HEAD_IP = "136.244.224.30"  # This is the IP of the grid computer. It is not used as a worker to not overload to jump-host
+CONFIG_FILE = Path(__file__).with_name("config.yaml")
+
+def load_config():
+    """Load configuration from config.yaml file."""
+    if not CONFIG_FILE.exists():
+        raise FileNotFoundError(f"Config file not found: {CONFIG_FILE}")
+    
+    with CONFIG_FILE.open(encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    
+    return config
+
+def get_default_head_ip():
+    """Get DEFAULT_HEAD_IP from config.yaml."""
+    config = load_config()
+    return config.get("DEFAULT_HEAD_IP")
+
+def get_grid_head_ip():
+    """Get GRID_HEAD_IP from config.yaml."""
+    config = load_config()
+    return config.get("GRID_HEAD_IP")
+
+# Load IPs from config for backward compatibility and convenience
+DEFAULT_HEAD_IP = get_default_head_ip()
+GRID_HEAD_IP = get_grid_head_ip()
 
 def wrap_with_conda_env(command: str, conda_env: str | None):
     """
