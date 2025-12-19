@@ -1,10 +1,11 @@
-import csv
+import os
 import shlex
-from datetime import datetime
-from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import paramiko
 from ping_workers import WORKER_FILE, load_workers, normalize, parse_args
 from ray_setup import wrap_with_conda_env
+from rich.console import Console
+from rich.table import Table
 
 def short_text(value, max_len):
     text = (value or "").strip()
@@ -88,6 +89,73 @@ def run_diagnosis(host, username, password, conda_env):
         except Exception:
             pass
 
+def diagnosis_one_worker(worker: dict, default_username: str, default_password: str) -> dict:
+    """Picklable worker function to run diagnosis for a single worker in a separate process."""
+    room = normalize(worker.get("room"))
+    hostname = normalize(worker.get("hostname"))
+    host_ip = normalize(worker.get("ip-address"))
+    monitor = normalize(worker.get("monitor-name"))
+    username = normalize(worker.get("username")) or default_username
+    password = normalize(worker.get("password")) or default_password
+    conda_env = normalize(worker.get("env"))
+
+    diag = run_diagnosis(host_ip, username, password, conda_env)
+    return {
+        "room": room,
+        "hostname": hostname,
+        "ip": host_ip,
+        "monitor": monitor,
+        "ssh": diag["ssh"],
+        "ray_installed": diag["ray_installed"],
+        "ray_version": diag["ray_version"],
+        "ray_running": diag["ray_running"],
+        "role": diag["role"],
+        "details": diag["details"],
+    }
+
+def print_results_table(results: list[dict]):
+    """Print results as a Rich table."""
+    table = Table(title=f"Ray diagnosis ({len(results)} workers)")
+    table.add_column("ROOM", style="cyan", no_wrap=True)
+    table.add_column("HOSTNAME", style="white")
+    table.add_column("IP-ADDRESS", style="white")
+    table.add_column("MONITOR", style="white")
+    table.add_column("SSH", justify="center")
+    table.add_column("RAY", justify="center")
+    table.add_column("RAY_VERSION", style="white")
+    table.add_column("RAY_RUNNING", justify="center")
+    table.add_column("ROLE", style="white")
+
+    for r in results:
+        ver_disp = short_text(r["ray_version"] or "-", 12)
+
+        # Row coloring:
+        # - Ray status unknown => yellow (even if SSH failed)
+        # - Ray not running => red
+        # - Otherwise: SSH failed => red, else green
+        if r["ray_running"] == "unknown":
+            style = "yellow"
+        elif r["ray_running"] == "NO":
+            style = "red"
+        elif r["ssh"] != "YES":
+            style = "red"
+        else:
+            style = "green"
+        table.add_row(
+            r["room"],
+            r["hostname"],
+            r["ip"],
+            r["monitor"],
+            r["ssh"],
+            r["ray_installed"],
+            ver_disp,
+            r["ray_running"],
+            r["role"],
+            style=style,
+        )
+
+    Console().print(table)
+
 def ray_diagnosis():
     """General diagnosis test"""
     args = parse_args()
@@ -95,54 +163,59 @@ def ray_diagnosis():
     if not WORKER_FILE.exists():
         raise FileNotFoundError(f"CSV not found: {WORKER_FILE}")
 
-    print(f"Scanning workers from {WORKER_FILE}")
+    workers = load_workers(WORKER_FILE)
+
+    cpu_count = os.cpu_count() or 1
+    procs_per_core = 3
+    max_procs = max(1, cpu_count * procs_per_core)
+    pool_size = min(len(workers), max_procs) if workers else 0
+
+    results_by_idx: dict[int, dict] = {}
+    if pool_size == 0:
+        results: list[dict] = []
+    else:
+        with ProcessPoolExecutor(max_workers=pool_size) as executor:
+            futures = {
+                executor.submit(diagnosis_one_worker, worker, args.username, args.password): idx
+                for idx, worker in enumerate(workers)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    results_by_idx[idx] = future.result()
+                except Exception as exc:
+                    w = workers[idx]
+                    results_by_idx[idx] = {
+                        "room": normalize(w.get("room")),
+                        "hostname": normalize(w.get("hostname")),
+                        "ip": normalize(w.get("ip-address")),
+                        "monitor": normalize(w.get("monitor-name")),
+                        "ssh": "NO",
+                        "ray_installed": "unknown",
+                        "ray_version": "",
+                        "ray_running": "unknown",
+                        "role": "unknown",
+                        "details": f"Worker task crashed: {exc}",
+                    }
+
+        results = [results_by_idx[i] for i in range(len(workers))]
+
+    print_results_table(results)
 
     counts = {"ok": 0, "failed": 0}
     messages = []
-    rows = []
 
-    headers = ["room", "hostname", "ip-address", "monitor-name", "SSH-PING", "RAY-EXISTS", "RAY_VERSION", "RAY_RUNNING", "ROLE"]
-    rows.append(headers)
-
-    print(f"{'ROOM':<5} {'HOSTNAME':<30} {'IP-ADDRESS':<18} {'MONITOR':<15} {'SSH-PING':<8} {'RAY-EXISTS':<10} {'RAY_VERSION':<12} {'RAY_RUNNING':<11} {'ROLE':<8}")
-
-    for worker in load_workers(WORKER_FILE):  # Run the test for each worker
-        room = normalize(worker.get("room"))
-        hostname = normalize(worker.get("hostname"))
-        host_ip = normalize(worker.get("ip-address"))
-        monitor = normalize(worker.get("monitor-name"))
-        username = normalize(worker.get("username")) or args.username
-        password = normalize(worker.get("password")) or args.password
-        conda_env = normalize(worker.get("env"))
-
-        diag = run_diagnosis(host_ip, username, password, conda_env)
-
-        status = "ok" if diag["ssh"] == "YES" else "failed"
+    for r in results:
+        status = "ok" if r["ssh"] == "YES" else "failed"
         counts[status] += 1
-
-        ver_disp = short_text(diag["ray_version"] or "-", 12)
-
-        print(f"{room:<5} {hostname:<30} {host_ip:<18} {monitor:<15} {diag['ssh']:<8} {diag['ray_installed']:<10} {ver_disp:<12} {diag['ray_running']:<11} {diag['role']:<8}")
-        rows.append([room, hostname, host_ip, monitor, diag["ssh"], diag["ray_installed"], diag["ray_version"], diag["ray_running"], diag["role"]])
-
-        if diag["details"]:
-            messages.append(f"{hostname or host_ip}: {diag['details']}")
+        if r["details"]:
+            messages.append(f"{r['hostname'] or r['ip']}: {r['details']}")
 
     print(f"\n\n[SUMMARY] {counts['ok']} ok, {counts['failed']} failed")
     if messages:
         print("\nError Message:")
         for message in messages:
             print(f"--> {message}")
-
-    temp_dir = Path(__file__).with_name("temp")
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%y%m%d_%H%M%S")
-    log_path = temp_dir / f"{timestamp}_ray_diagnosis.csv"
-    with log_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        writer.writerows(rows)
-
-    print(f"\nSaved log to {log_path}")
 
 if __name__ == "__main__":
     ray_diagnosis()

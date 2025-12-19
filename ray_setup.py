@@ -1,12 +1,16 @@
 import argparse
+import os
 import paramiko
 import shlex
 import sys
 import yaml
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from ping_workers import load_env_defaults, normalize, load_workers, WORKER_FILE, ENV_FILE
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.theme import Theme
+from rich.markup import escape
 from contextlib import contextmanager
 
 theme = Theme({"info": "cyan", "success": "green", "warning": "yellow", "error": "bold red"})
@@ -28,6 +32,14 @@ def warning(msg: str):
 
 def error(msg: str):
     console.print(f"[error]{msg}[/error]")
+
+def short_text(value: str, max_len: int) -> str:
+    text = (value or "").strip()
+    if len(text) <= max_len:
+        return text
+    if max_len <= 3:
+        return text[:max_len]
+    return text[: max_len - 3] + "..."
 
 CONFIG_FILE = Path(__file__).with_name("config.yaml")
 
@@ -51,7 +63,6 @@ def get_grid_head_ip():
     config = load_config()
     return config.get("GRID_HEAD_IP")
 
-# Load IPs from config for backward compatibility and convenience
 DEFAULT_HEAD_IP = get_default_head_ip()
 GRID_HEAD_IP = get_grid_head_ip()
 
@@ -129,31 +140,24 @@ def head_state(host, username, password, timeout=10):
         return "worker"
     return "none"
 
-def start_head(host, username, password, port, timeout=20, dry_run=False, prune=False):
+def start_head(host, username, password, port, timeout=20, prune=False):
     """Start the ray cluster in the host machine"""
     if prune:
         cmd = f"ray start --head --port={int(port)} --dashboard-host=0.0.0.0"
     else:
         cmd = f"ray stop --force || true; ray start --head --port={int(port)} --dashboard-host=0.0.0.0"  # Command for starting a new head after killing anything existing
-    if dry_run:
-        print(f"[dry-run] {host}: {cmd}")  # If it is dry run, just print it
-        return
 
     exit_code, out, err = run_remote(host, username, password, cmd, timeout=timeout)  # Run the start command
     if exit_code != 0:
         message = (err or out).strip() or "failed to start head"
         raise RuntimeError(message)
 
-def start_worker(host, username, password, head_ip, port, conda_env=None, timeout=20, dry_run=False, prune=False):
+def start_worker(host, username, password, head_ip, port, conda_env=None, timeout=20, prune=False):
     if prune:
         base_cmd = f"ray start --address='{head_ip}:{int(port)}' "
     else:
         base_cmd = f"ray stop --force || true; ray start --address='{head_ip}:{int(port)}' "
     cmd = wrap_with_conda_env(base_cmd, conda_env)
-
-    if dry_run:
-        warning(f"[dry-run] {host}: {cmd}")
-        return
 
     with status(f"Starting worker {host}..."):
         exit_code, out, err = run_remote(host, username, password, cmd, timeout=timeout)
@@ -165,17 +169,8 @@ def start_worker(host, username, password, head_ip, port, conda_env=None, timeou
 
     success(f"Started worker {host}")
 
-def setup_head(head_ip, username, password, port, dry_run=False, prune=False):
+def setup_head(head_ip, username, password, port, prune=False):
     info(f"Connecting to head {head_ip}")
-
-    if dry_run:
-        if prune:
-            warning("[dry-run] Would start head node only if Ray is not running")
-            start_head(head_ip, username, password, port=port, dry_run=True, prune=True)
-        else:
-            warning("[dry-run] Would start head node")
-            start_head(head_ip, username, password, port=port, dry_run=True)
-        return
 
     if prune:
         running = ray_process_state(head_ip, username, password)
@@ -188,7 +183,7 @@ def setup_head(head_ip, username, password, port, dry_run=False, prune=False):
         info("Head not running, starting fresh (--prune)")
         require_ray(head_ip, username, password)
         with status(f"Starting head {head_ip}..."):
-            start_head(head_ip, username, password, port=port, dry_run=dry_run, prune=True)
+            start_head(head_ip, username, password, port=port, prune=True)
         success(f"Started head {head_ip}")
         return
 
@@ -205,38 +200,128 @@ def setup_head(head_ip, username, password, port, dry_run=False, prune=False):
         info("Head not running, starting fresh")
 
     with status(f"Starting head {head_ip}..."):
-        start_head(head_ip, username, password, port=port, dry_run=dry_run, prune=False)
+        start_head(head_ip, username, password, port=port, prune=False)
 
     success(f"Started head {head_ip}")
 
-def setup_workers(workers, default_user, default_password, head_ip, port, dry_run=False, prune=False):
-    """Setup the workers for the given head IP"""
-    for worker in workers:
-        host = normalize(worker.get("ip-address"))
-        if not host or host in {head_ip, GRID_HEAD_IP}:  # If the worker is the head or the grid head do not start anything
-            continue
+def start_worker_quiet(host, username, password, *, head_ip, port, conda_env=None, timeout=20, prune=False):
+    """Start a Ray worker without progress/spinner output (used from multiprocessing workers)."""
+    if prune:
+        base_cmd = f"ray start --address='{head_ip}:{int(port)}' "
+    else:
+        base_cmd = f"ray stop --force || true; ray start --address='{head_ip}:{int(port)}' "
+    cmd = wrap_with_conda_env(base_cmd, conda_env)
+    exit_code, out, err = run_remote(host, username, password, cmd, timeout=timeout)
+    if exit_code != 0:
+        message = (err or out).strip() or f"failed to start worker {host}"
+        raise RuntimeError(message)
 
-        user = normalize(worker.get("username")) or default_user
-        password = normalize(worker.get("password")) or default_password
-        conda_env = normalize(worker.get("env"))
-        try:
-            if dry_run:
-                if prune:
-                    warning(f"[dry-run] Would start worker {host} only if Ray is not running")
-                    start_worker(host, user, password, head_ip=head_ip, port=port, conda_env=conda_env, dry_run=True, prune=True)
+def setup_worker_task(worker: dict, default_user: str, default_password: str, head_ip: str, port: int, prune: bool) -> dict:
+    """Picklable worker task to start Ray on a single worker."""
+    room = normalize(worker.get("room"))
+    host = normalize(worker.get("ip-address"))
+    hostname = normalize(worker.get("hostname"))
+    monitor = normalize(worker.get("monitor-name"))
+    user = normalize(worker.get("username")) or default_user
+    password = normalize(worker.get("password")) or default_password
+    conda_env = normalize(worker.get("env"))
+
+    try:
+        if prune:
+            running = ray_process_state(host, user, password)
+            if running != "none":
+                return {"room": room, "host": host, "hostname": hostname, "monitor": monitor, "status": "skipped", "details": f"Ray already running ({running}); skipped due to --prune"}
+
+        require_ray(host, user, password, conda_env=conda_env)
+        start_worker_quiet(host, user, password, head_ip=head_ip, port=port, conda_env=conda_env, prune=prune)
+        return {"room": room, "host": host, "hostname": hostname, "monitor": monitor, "status": "ok", "details": ""}
+    except Exception as exc:
+        return {"room": room, "host": host, "hostname": hostname, "monitor": monitor, "status": "failed", "details": str(exc)}
+
+def setup_workers(workers, default_user, default_password, head_ip, port, prune=False):
+    """Setup the workers for the given head IP"""
+    # NOTE: This function is parallelized; avoid printing from subprocesses.
+    def eligible(worker: dict) -> bool:
+        host = normalize(worker.get("ip-address"))
+        return bool(host) and host not in {head_ip, GRID_HEAD_IP}
+
+    targets = [w for w in workers if eligible(w)]
+    if not targets:
+        warning("No eligible workers found (after excluding head + grid head)")
+        return
+
+    cpu_count = os.cpu_count() or 1
+    procs_per_core = 3
+    max_procs = max(1, cpu_count * procs_per_core)
+    pool_size = min(len(targets), max_procs)
+
+    results_by_idx: dict[int, dict] = {}
+    task_ids: dict[int, int] = {}
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold]{task.fields[host]}[/bold]"),
+        TextColumn("{task.description}"),
+        console=console,
+        transient=False,
+    ) as progress:
+        for idx, w in enumerate(targets):
+            room = normalize(w.get("room"))
+            host = normalize(w.get("ip-address"))
+            hostname = normalize(w.get("hostname"))
+            monitor = normalize(w.get("monitor-name"))
+            base_label = monitor or hostname or host
+            label = escape(f"[{room}] {base_label}") if room else base_label
+            task_ids[idx] = progress.add_task("queued", total=1, host=label)
+
+        with ProcessPoolExecutor(max_workers=pool_size) as executor:
+            futures = {}
+            for idx, w in enumerate(targets):
+                progress.update(task_ids[idx], description="running")
+                futures[executor.submit(setup_worker_task, w, default_user, default_password, head_ip, port, prune)] = idx
+
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    results_by_idx[idx] = future.result()
+                except Exception as exc:
+                    w = targets[idx]
+                    room = normalize(w.get("room"))
+                    results_by_idx[idx] = {
+                        "room": room,
+                        "host": normalize(w.get("ip-address")),
+                        "hostname": normalize(w.get("hostname")),
+                        "monitor": normalize(w.get("monitor-name")),
+                        "status": "failed",
+                        "details": f"Worker task crashed: {exc}",
+                    }
+
+                r = results_by_idx[idx]
+                status = r["status"]
+                details = short_text(r.get("details", ""), 120)
+                if status == "ok":
+                    desc = "[green]ok[/green]"
+                elif status == "skipped":
+                    desc = f"[yellow]skipped[/yellow] {details}".rstrip()
                 else:
-                    start_worker(host, user, password, head_ip=head_ip, port=port, conda_env=conda_env, dry_run=True)
-                continue
-            if prune:
-                running = ray_process_state(host, user, password)
-                if running != "none":
-                    warning(f"{host}: Ray already running ({running}); skipping due to --prune")
-                    continue
-            require_ray(host, user, password, conda_env=conda_env)  # Check if the worker has ray
-            start_worker(host, user, password, head_ip=head_ip, port=port, conda_env=conda_env, dry_run=False, prune=prune)  # Start the worker
-        except Exception as exc:
-            error(f"{host}: {exc}")  # If there is an issue, print the exception and continue
-            continue
+                    desc = f"[red]failed[/red] {details}".rstrip()
+                progress.update(task_ids[idx], description=desc, completed=1)
+
+    results = [results_by_idx[i] for i in range(len(targets))]
+    counts = {"ok": 0, "failed": 0, "skipped": 0}
+    messages: list[str] = []
+    for r in results:
+        counts[r["status"]] = counts.get(r["status"], 0) + 1
+        if r.get("details") and r["status"] == "failed":
+            label = r.get("monitor") or r.get("hostname") or r.get("host")
+            room = r.get("room") or ""
+            prefix = f"[{room}] " if room else ""
+            messages.append(f"{prefix}{label} ({r['host']}): {r['details']}")
+
+    info(f"[SUMMARY] {counts.get('ok', 0)} ok, {counts.get('skipped', 0)} skipped, {counts.get('failed', 0)} failed")
+    if messages:
+        error("Error Message:")
+        for message in messages:
+            error(f"--> {message}")
 
 def parse_args():
     env_defaults = load_env_defaults()
@@ -246,7 +331,6 @@ def parse_args():
     parser.add_argument("--workers-file", default=str(WORKER_FILE))
     parser.add_argument("--head-ip", default=DEFAULT_HEAD_IP)
     parser.add_argument("--port", type=int, default=6379)
-    parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")
     parser.add_argument("--prune", action="store_true", help="Only start Ray where it is not already running (do not stop existing Ray processes)")
     args = parser.parse_args()
 
@@ -260,8 +344,8 @@ def main():
     args = parse_args()
     workers = load_workers(Path(args.workers_file))
     try:
-        setup_head(args.head_ip, args.username, args.password, port=args.port, dry_run=args.dry_run, prune=args.prune)  # Setup the cluster head
-        setup_workers(workers, args.username, args.password, head_ip=args.head_ip, port=args.port, dry_run=args.dry_run, prune=args.prune)  # Setup all the workers
+        setup_head(args.head_ip, args.username, args.password, port=args.port, prune=args.prune)  # Setup the cluster head
+        setup_workers(workers, args.username, args.password, head_ip=args.head_ip, port=args.port, prune=args.prune)  # Setup all the workers
     except RuntimeError as exc:
         sys.exit(str(exc))
 

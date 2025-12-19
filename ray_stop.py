@@ -1,13 +1,19 @@
+import argparse
 import csv
+import os
 import yaml
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 import paramiko
-from ping_workers import WORKER_FILE, load_workers, normalize, parse_args
+from ping_workers import WORKER_FILE, ENV_FILE, load_env_defaults, load_workers, normalize
 from ray_setup import wrap_with_conda_env
 from ray_diagnosis import short_text, run_remote
+from rich.console import Console
+from rich.table import Table
 
 CONFIG_FILE = Path(__file__).with_name("config.yaml")
+console = Console()
 
 def get_grid_head_ip():
     """Get GRID_HEAD_IP from config.yaml."""
@@ -38,6 +44,21 @@ def match_workers(worker: dict, selectors_lc: set[str]) -> bool:
     hostname = normalize(worker.get("hostname")).lower()
     monitor = normalize(worker.get("monitor-name")).lower()
     return bool({ip_addr, hostname, monitor} & selectors_lc)
+
+def parse_args():
+    """Parse args for ray_stop (includes --workers selector list)."""
+    env_defaults = load_env_defaults()
+    parser = argparse.ArgumentParser(description="Stop Ray on workers listed in workers.csv")
+    parser.add_argument("--username", help="SSH username", default=env_defaults.get("USERNAME"))
+    parser.add_argument("--password", help="SSH password", default=env_defaults.get("PASSWORD"))
+    parser.add_argument("--workers", help=("Comma-separated selectors to target specific workers by IP address, hostname, or monitor-name.\nExample: --workers 136.244.224.165,rat,NL214-Lin11171"), default="")
+    args = parser.parse_args()
+
+    missing = [field for field in ("username", "password") if not getattr(args, field)]
+    if missing:
+        parser.error(f"Missing required credentials: {', '.join(missing)}. Add CLI arguments or update {ENV_FILE.name}.")
+
+    return args
 
 def stop_ray(host, username, password, conda_env=None, timeout=20):
     """Connect to the hosts and stop the Ray cluster."""
@@ -82,6 +103,36 @@ def stop_ray(host, username, password, conda_env=None, timeout=20):
         except Exception:
             pass
 
+def stop_one_worker(worker: dict, default_username: str, default_password: str, grid_head_ip: str) -> dict:
+    """Picklable task: stop Ray on a single worker."""
+    room = normalize(worker.get("room"))
+    hostname = normalize(worker.get("hostname"))
+    host_ip = normalize(worker.get("ip-address"))
+    monitor = normalize(worker.get("monitor-name"))
+    username = normalize(worker.get("username")) or default_username
+    password = normalize(worker.get("password")) or default_password
+    conda_env = normalize(worker.get("env"))
+
+    if not host_ip or host_ip == grid_head_ip:
+        return {
+            "room": room,
+            "hostname": hostname,
+            "ip": host_ip,
+            "monitor": monitor,
+            "status": "skipped",
+            "details": "skipped",
+        }
+
+    status, details = stop_ray(host_ip, username, password, conda_env=conda_env)
+    return {
+        "room": room,
+        "hostname": hostname,
+        "ip": host_ip,
+        "monitor": monitor,
+        "status": status,
+        "details": details,
+    }
+
 def ray_stop():
     args = parse_args()
 
@@ -96,45 +147,87 @@ def ray_stop():
     else:
         print(f"Stopping ray on workers from {WORKER_FILE}")
 
+    all_workers = load_workers(WORKER_FILE)
+    selected_workers = [
+        w
+        for w in all_workers
+        if match_workers(w, selectors_lc) and normalize(w.get("ip-address")) and normalize(w.get("ip-address")) != grid_head_ip
+    ]
+
+    if selectors_lc and not selected_workers:
+        raise SystemExit("No workers matched --workers selectors. Check workers.csv for ip-address / hostname / monitor-name values.")
+
+    cpu_count = os.cpu_count() or 1
+    procs_per_core = 3
+    max_procs = max(1, cpu_count * procs_per_core)
+    pool_size = min(len(selected_workers), max_procs) if selected_workers else 0
+
+    results_by_idx: dict[int, dict] = {}
+    if pool_size:
+        with ProcessPoolExecutor(max_workers=pool_size) as executor:
+            futures = {
+                executor.submit(stop_one_worker, worker, args.username, args.password, grid_head_ip): idx
+                for idx, worker in enumerate(selected_workers)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    results_by_idx[idx] = future.result()
+                except Exception as exc:
+                    w = selected_workers[idx]
+                    results_by_idx[idx] = {
+                        "room": normalize(w.get("room")),
+                        "hostname": normalize(w.get("hostname")),
+                        "ip": normalize(w.get("ip-address")),
+                        "monitor": normalize(w.get("monitor-name")),
+                        "status": "failed",
+                        "details": short_text(f"Worker task crashed: {exc}", 160),
+                    }
+
+    results = [results_by_idx[i] for i in range(len(selected_workers))] if selected_workers else []
+
     counts = {"ok": 0, "failed": 0}
-    messages = []
+    messages: list[str] = []
+
+    # Rich output table
+    table = Table(title=f"Ray stop results ({len(results)} workers)", box=None, show_lines=False)
+    table.add_column("ROOM", style="white", no_wrap=True)
+    table.add_column("HOSTNAME", style="white")
+    table.add_column("IP-ADDRESS", style="white")
+    table.add_column("MONITOR", style="white")
+    table.add_column("STOPPED", justify="center")
+    table.add_column("DETAILS", style="white", no_wrap=True, overflow="ellipsis", max_width=80)
 
     rows = []
     headers = ["room", "hostname", "ip-address", "monitor-name", "STOPPED"]
     rows.append(headers)
 
-    print(f"{'ROOM':<5} {'HOSTNAME':<30} {'IP-ADDRESS':<18} {'MONITOR':<15} {'STOPPED':<8}")
+    for r in results:
+        status = r["status"]
+        if status == "ok":
+            counts["ok"] += 1
+            stopped = "YES"
+            style = "green"
+        else:
+            counts["failed"] += 1
+            stopped = "NO"
+            style = "red"
 
-    selected = 0
-    for worker in load_workers(WORKER_FILE):
-        room = normalize(worker.get("room"))
-        hostname = normalize(worker.get("hostname"))
-        host_ip = normalize(worker.get("ip-address"))
-        monitor = normalize(worker.get("monitor-name"))
-
-        if not match_workers(worker, selectors_lc):
-            continue
-
-        if not host_ip or host_ip == grid_head_ip:
-            continue
-
-        selected += 1
-        username = normalize(worker.get("username")) or args.username
-        password = normalize(worker.get("password")) or args.password
-        conda_env = normalize(worker.get("env"))
-
-        status, details = stop_ray(host_ip, username, password, conda_env=conda_env)
-        counts[status] += 1
-
-        stopped = "YES" if status == "ok" else "NO"
-        print(f"{room:<5} {hostname:<30} {host_ip:<18} {monitor:<15} {stopped:<8}")
-        rows.append([room, hostname, host_ip, monitor, stopped])
+        table.add_row(
+            r["room"],
+            r["hostname"],
+            r["ip"],
+            r["monitor"],
+            stopped,
+            short_text(r.get("details", ""), 120) or "-",
+            style=style,
+        )
+        rows.append([r["room"], r["hostname"], r["ip"], r["monitor"], stopped])
 
         if status != "ok":
-            messages.append(f"{hostname or host_ip}: {details}")
+            messages.append(f"{r['hostname'] or r['ip']}: {r.get('details', '')}")
 
-    if selectors_lc and selected == 0:
-        raise SystemExit("No workers matched --workers selectors. Check workers.csv for ip-address / hostname / monitor-name values.")
+    console.print(table)
 
     print(f"\n\n[SUMMARY] {counts['ok']} ok, {counts['failed']} failed")
     if messages:
