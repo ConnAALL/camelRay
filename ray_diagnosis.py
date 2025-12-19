@@ -15,6 +15,7 @@ import paramiko
 from ping_workers import WORKER_FILE, load_workers, normalize, parse_args
 from ray_setup import wrap_with_conda_env
 from rich.console import Console
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 def short_text(value, max_len):
@@ -182,44 +183,57 @@ def ray_diagnosis():
     if pool_size == 0:
         results: list[dict] = []
     else:
-        with ProcessPoolExecutor(max_workers=pool_size) as executor:
-            futures = {
-                executor.submit(diagnosis_one_worker, worker, args.username, args.password): idx
-                for idx, worker in enumerate(workers)
-            }
-            for future in as_completed(futures):
-                idx = futures[future]
-                try:
-                    results_by_idx[idx] = future.result()
-                except Exception as exc:
-                    w = workers[idx]
-                    results_by_idx[idx] = {
-                        "room": normalize(w.get("room")),
-                        "hostname": normalize(w.get("hostname")),
-                        "ip": normalize(w.get("ip-address")),
-                        "monitor": normalize(w.get("monitor-name")),
-                        "ssh": "NO",
-                        "ray_installed": "unknown",
-                        "ray_version": "",
-                        "ray_running": "unknown",
-                        "role": "unknown",
-                        "details": f"Worker task crashed: {exc}",
-                    }
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]Diagnosing workers[/bold]"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total}"),
+            TimeElapsedColumn(),
+            console=Console(),
+            transient=True,
+        ) as progress:
+            task_id = progress.add_task("diag", total=len(workers))
+            with ProcessPoolExecutor(max_workers=pool_size) as executor:
+                futures = {
+                    executor.submit(diagnosis_one_worker, worker, args.username, args.password): idx
+                    for idx, worker in enumerate(workers)
+                }
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    try:
+                        results_by_idx[idx] = future.result()
+                    except Exception as exc:
+                        w = workers[idx]
+                        results_by_idx[idx] = {
+                            "room": normalize(w.get("room")),
+                            "hostname": normalize(w.get("hostname")),
+                            "ip": normalize(w.get("ip-address")),
+                            "monitor": normalize(w.get("monitor-name")),
+                            "ssh": "NO",
+                            "ray_installed": "unknown",
+                            "ray_version": "",
+                            "ray_running": "unknown",
+                            "role": "unknown",
+                            "details": f"Worker task crashed: {exc}",
+                        }
+                    progress.advance(task_id, 1)
 
-        results = [results_by_idx[i] for i in range(len(workers))]
+            results = [results_by_idx[i] for i in range(len(workers))]
 
     print_results_table(results)
 
-    counts = {"ok": 0, "failed": 0}
+    counts = {"YES": 0, "NO": 0, "unknown": 0}
     messages = []
 
     for r in results:
-        status = "ok" if r["ssh"] == "YES" else "failed"
-        counts[status] += 1
+        ray_state = r.get("ray_running", "unknown")
+        if ray_state not in {"YES", "NO", "unknown"}:
+            ray_state = "unknown"
+        counts[ray_state] += 1
         if r["details"]:
             messages.append(f"{r['hostname'] or r['ip']}: {r['details']}")
 
-    print(f"\n\n[SUMMARY] {counts['ok']} ok, {counts['failed']} failed")
+    print(f"\n\n[SUMMARY] {counts['YES']} running Ray, {counts['NO']} not running Ray, {counts['unknown']} unknown")
     if messages:
         print("\nError Message:")
         for message in messages:
