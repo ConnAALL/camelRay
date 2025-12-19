@@ -1,7 +1,5 @@
 """
-camelray.py
-
-Interactive terminal menu for managing the CAMEL Ray cluster scripts.
+Interactive terminal menu for managing the Camel Ray cluster.
 """
 
 import subprocess
