@@ -1,3 +1,14 @@
+"""
+Setup the ray cluster on the workers. 
+
+It goes through each worker in the workers.csv file and starts the ray cluster on the workers.
+It uses the SSH credentials in .env file and the config.yaml file to setup the ray cluster with the head node.
+By default, it does not use the main grid computer as a worker to not overload the jump-host.
+
+If you would like to start the ray cluster on the machines that are not running ray, you can use the --prune option.
+Otherwise, the script will stop any existing ray processes and start a fresh cluster.
+"""
+
 import argparse
 import os
 import paramiko
