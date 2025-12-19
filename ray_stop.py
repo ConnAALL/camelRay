@@ -9,6 +9,7 @@ To stop specific workers, you can use the --workers option to specify the worker
 
 import argparse
 import os
+import re
 import yaml
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -22,6 +23,24 @@ from rich.table import Table
 
 CONFIG_FILE = Path(__file__).with_name("config.yaml")
 console = Console()
+
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+def clean_details(value: str, max_len: int = 200) -> str:
+    """
+    Make DETAILS safe/stable for Rich table width calculations:
+    - strip ANSI escape codes
+    - remove other control chars
+    - collapse whitespace/newlines
+    - clip
+    """
+    text = (value or "").strip()
+    if not text:
+        return ""
+    text = _ANSI_RE.sub("", text)
+    text = "".join(ch for ch in text if ch.isprintable())
+    text = " ".join(text.split())
+    return short_text(text, max_len)
 
 def get_grid_head_ip():
     """Get GRID_HEAD_IP from config.yaml."""
@@ -89,22 +108,22 @@ def stop_ray(host, username, password, conda_env=None, timeout=20):
         stop_code, stop_out, stop_err = run_remote(ssh, cmd, timeout=timeout)
 
         # Treat SSH success + command executed as ok; ray may not be installed everywhere.
-        details = (stop_err or stop_out).strip()
+        details = clean_details((stop_err or stop_out).strip(), 200)
         if stop_code == 0:
-            return "ok", short_text(details or "stopped", 160)
+            return "ok", details or "stopped"
 
         # If ray isn't available, cmd may still be ok due to `|| true`; otherwise capture output.
         if "command not found" in details.lower() or "no such file" in details.lower():
-            return "ok", short_text(details or "ray not found", 160)
+            return "ok", details or "ray not found"
 
-        return "failed", short_text(details or f"ray stop failed (exit {stop_code})", 160)
+        return "failed", details or f"ray stop failed (exit {stop_code})"
 
     except paramiko.AuthenticationException:
         return "failed", "Authentication failed."
     except paramiko.SSHException as exc:
-        return "failed", short_text(f"SSH connection failed: {exc}", 160)
+        return "failed", clean_details(f"SSH connection failed: {exc}", 200)
     except Exception as exc:
-        return "failed", short_text(f"Error: {exc}", 160)
+        return "failed", clean_details(f"Error: {exc}", 200)
     finally:
         try:
             ssh.close()
@@ -199,7 +218,7 @@ def ray_stop():
                             "ip": normalize(w.get("ip-address")),
                             "monitor": normalize(w.get("monitor-name")),
                             "status": "failed",
-                            "details": short_text(f"Worker task crashed: {exc}", 160),
+                            "details": short_text(f"Worker task crashed: {exc}", 80),
                         }
                     progress.advance(task_id, 1)
 
@@ -215,7 +234,7 @@ def ray_stop():
     table.add_column("IP-ADDRESS", style="white")
     table.add_column("MONITOR", style="white")
     table.add_column("STOPPED", justify="center")
-    table.add_column("DETAILS", style="white", no_wrap=True, overflow="ellipsis", max_width=80)
+    table.add_column("DETAILS", style="white", no_wrap=True, overflow="ellipsis", width=80)
 
     for r in results:
         status = r["status"]
@@ -234,7 +253,7 @@ def ray_stop():
             r["ip"],
             r["monitor"],
             stopped,
-            short_text(r.get("details", ""), 120) or "-",
+            (r.get("details", "") or "-"),
             style=style,
         )
 
