@@ -1,15 +1,23 @@
+"""
+Script that stops the ray cluster on the workers.
+
+It goes through each worker in the workers.csv file and stops the ray cluster on the workers.
+It uses the SSH credentials in .env file and the config.yaml file to stop the ray cluster on the workers.
+
+To stop specific workers, you can use the --workers option to specify the workers to stop.
+"""
+
 import argparse
-import csv
 import os
 import yaml
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import datetime
 from pathlib import Path
 import paramiko
 from ping_workers import WORKER_FILE, ENV_FILE, load_env_defaults, load_workers, normalize
 from ray_setup import wrap_with_conda_env
 from ray_diagnosis import short_text, run_remote
 from rich.console import Console
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 CONFIG_FILE = Path(__file__).with_name("config.yaml")
@@ -164,25 +172,36 @@ def ray_stop():
 
     results_by_idx: dict[int, dict] = {}
     if pool_size:
-        with ProcessPoolExecutor(max_workers=pool_size) as executor:
-            futures = {
-                executor.submit(stop_one_worker, worker, args.username, args.password, grid_head_ip): idx
-                for idx, worker in enumerate(selected_workers)
-            }
-            for future in as_completed(futures):
-                idx = futures[future]
-                try:
-                    results_by_idx[idx] = future.result()
-                except Exception as exc:
-                    w = selected_workers[idx]
-                    results_by_idx[idx] = {
-                        "room": normalize(w.get("room")),
-                        "hostname": normalize(w.get("hostname")),
-                        "ip": normalize(w.get("ip-address")),
-                        "monitor": normalize(w.get("monitor-name")),
-                        "status": "failed",
-                        "details": short_text(f"Worker task crashed: {exc}", 160),
-                    }
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]Stopping Ray[/bold]"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total}"),
+            TimeElapsedColumn(),
+            console=console,
+            transient=True,
+        ) as progress:
+            task_id = progress.add_task("stop", total=len(selected_workers))
+            with ProcessPoolExecutor(max_workers=pool_size) as executor:
+                futures = {
+                    executor.submit(stop_one_worker, worker, args.username, args.password, grid_head_ip): idx
+                    for idx, worker in enumerate(selected_workers)
+                }
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    try:
+                        results_by_idx[idx] = future.result()
+                    except Exception as exc:
+                        w = selected_workers[idx]
+                        results_by_idx[idx] = {
+                            "room": normalize(w.get("room")),
+                            "hostname": normalize(w.get("hostname")),
+                            "ip": normalize(w.get("ip-address")),
+                            "monitor": normalize(w.get("monitor-name")),
+                            "status": "failed",
+                            "details": short_text(f"Worker task crashed: {exc}", 160),
+                        }
+                    progress.advance(task_id, 1)
 
     results = [results_by_idx[i] for i in range(len(selected_workers))] if selected_workers else []
 
@@ -190,17 +209,13 @@ def ray_stop():
     messages: list[str] = []
 
     # Rich output table
-    table = Table(title=f"Ray stop results ({len(results)} workers)", box=None, show_lines=False)
+    table = Table(title=None)
     table.add_column("ROOM", style="white", no_wrap=True)
     table.add_column("HOSTNAME", style="white")
     table.add_column("IP-ADDRESS", style="white")
     table.add_column("MONITOR", style="white")
     table.add_column("STOPPED", justify="center")
     table.add_column("DETAILS", style="white", no_wrap=True, overflow="ellipsis", max_width=80)
-
-    rows = []
-    headers = ["room", "hostname", "ip-address", "monitor-name", "STOPPED"]
-    rows.append(headers)
 
     for r in results:
         status = r["status"]
@@ -222,7 +237,6 @@ def ray_stop():
             short_text(r.get("details", ""), 120) or "-",
             style=style,
         )
-        rows.append([r["room"], r["hostname"], r["ip"], r["monitor"], stopped])
 
         if status != "ok":
             messages.append(f"{r['hostname'] or r['ip']}: {r.get('details', '')}")
@@ -234,16 +248,6 @@ def ray_stop():
         print("\nError Message:")
         for message in messages:
             print(f"--> {message}")
-
-    temp_dir = Path(__file__).with_name("temp")
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%y%m%d_%H%M%S")
-    log_path = temp_dir / f"{timestamp}_ray_stop.csv"
-    with log_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        writer.writerows(rows)
-
-    print(f"\nSaved log to {log_path}")
 
 if __name__ == "__main__":
     ray_stop()
