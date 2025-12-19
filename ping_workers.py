@@ -1,7 +1,7 @@
 """
 Scan the nodes in workers.csv and check if they are reachable via SSH.
 
-This assumes you are using a computer on the 136.244.224.xxx network.
+This assumes you are running this script on a machine that is has an IP address of 136.244.224.xxx.
 """
 
 import argparse
@@ -11,10 +11,11 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import paramiko
 from pathlib import Path
 from rich.console import Console
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
 
-WORKER_FILE = Path(__file__).with_name("workers.csv")
-ENV_FILE = Path(__file__).with_name(".env")
+WORKER_FILE = Path(__file__).with_name("workers.csv")  # File that has the list of workers and their information
+ENV_FILE = Path(__file__).with_name(".env")  # File that has the credentials for the SSH connection
 
 def load_env_defaults():
     """Load username/password information from the .env file if it exists."""
@@ -56,6 +57,7 @@ def normalize(value):
     return (value or "").strip()
 
 def process_gpu_output(out):
+    """Process the GPU output and return the GPU name and the GPU model"""
     text = (out or "").strip()
     if not text:
         return ("", "")
@@ -72,7 +74,7 @@ def process_gpu_output(out):
         idx = text.lower().index(rev_key.lower())
         text = text[:idx].strip()
         
-    if len(text) > 50:
+    if len(text) > 50:  # Trim anything longer than 50 characters
         text = text[:45] + "..."
     return (out, text)
 
@@ -91,7 +93,7 @@ def ssh_check(host, user, password):
         ssh.connect(host, username=user, password=password, timeout=5)
 
         # Run a simple command to check if the SSH connection is established
-        stdin, stdout, stderr = ssh.exec_command("echo ok")
+        _, stdout, _ = ssh.exec_command("echo ok")
 
         # Read the output
         result = stdout.read().decode().strip()
@@ -149,7 +151,7 @@ def ping_one_worker(worker: dict, default_username: str, default_password: str) 
 
 def print_results_table(results: list[dict]):
     """Print results as a Rich table."""
-    table = Table(title=f"Ping results ({len(results)} workers)")
+    table = Table(title=None)
     table.add_column("ROOM", style="cyan", no_wrap=True)
     table.add_column("HOSTNAME", style="white")
     table.add_column("IP-ADDRESS", style="white")
@@ -182,41 +184,52 @@ def ping_workers():
     if not WORKER_FILE.exists():
         raise FileNotFoundError(f"CSV not found: {WORKER_FILE}")
 
-    all_workers = load_workers(WORKER_FILE)
+    all_workers = load_workers(WORKER_FILE)  # Load the worker information
 
-    cpu_count = os.cpu_count() or 1
+    cpu_count = os.cpu_count() or 1  # Get the number of CPU cores
     procs_per_core = 3
-    max_procs = max(1, cpu_count * procs_per_core)
+    max_procs = max(1, cpu_count * procs_per_core)  # Calculate the maximum number of processes
     pool_size = min(len(all_workers), max_procs) if all_workers else 0
 
-    results_by_idx: dict[int, dict] = {}
+    results_by_idx: dict[int, dict] = {}  # Dictionary to store the results by index
     if pool_size == 0:
         results: list[dict] = []
     else:
-        with ProcessPoolExecutor(max_workers=pool_size) as executor:
-            futures = {
-                executor.submit(ping_one_worker, worker, args.username, args.password): idx
-                for idx, worker in enumerate(all_workers)
-            }
-            for future in as_completed(futures):
-                idx = futures[future]
-                try:
-                    results_by_idx[idx] = future.result()
-                except Exception as exc:
-                    w = all_workers[idx]
-                    results_by_idx[idx] = {
-                        "room": normalize(w.get("room")),
-                        "hostname": normalize(w.get("hostname")),
-                        "ip": normalize(w.get("ip-address")),
-                        "monitor": normalize(w.get("monitor-name")),
-                        "status": "failed",
-                        "details": f"Worker task crashed: {exc}",
-                        "cores": "unknown",
-                        "gpu_raw": "",
-                        "gpu_short": "",
-                    }
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]Pinging workers[/bold]"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total}"),
+            TimeElapsedColumn(),
+            console=Console(),
+            transient=True,
+        ) as progress:
+            task_id = progress.add_task("ping", total=len(all_workers))
+            with ProcessPoolExecutor(max_workers=pool_size) as executor:
+                futures = {
+                    executor.submit(ping_one_worker, worker, args.username, args.password): idx  # Submit the worker function to the executor
+                    for idx, worker in enumerate(all_workers)
+                }
+                for future in as_completed(futures):  # Check the results of the worker function
+                    idx = futures[future]
+                    try:
+                        results_by_idx[idx] = future.result()
+                    except Exception as exc:
+                        w = all_workers[idx]
+                        results_by_idx[idx] = {
+                            "room": normalize(w.get("room")),
+                            "hostname": normalize(w.get("hostname")),
+                            "ip": normalize(w.get("ip-address")),
+                            "monitor": normalize(w.get("monitor-name")),
+                            "status": "failed",
+                            "details": f"Worker task crashed: {exc}",
+                            "cores": "unknown",
+                            "gpu_raw": "",
+                            "gpu_short": "",
+                        }
+                    progress.advance(task_id, 1)
 
-        results = [results_by_idx[i] for i in range(len(all_workers))]
+            results = [results_by_idx[i] for i in range(len(all_workers))]
 
     print_results_table(results)
 
