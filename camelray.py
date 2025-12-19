@@ -114,26 +114,17 @@ def init_local_conda_env():
         if env_name:
             CACHED_CONDA_ENV = env_name
             console.print(f"[yellow]Conda env detected from workers.csv: {env_name}[/yellow]\n")
+            return
 
-def prompt_local_conda_env():
-    """
-    Prompt once for the local conda env to use for running scripts that need Ray/Python.
-    Never saved to disk.
-    """
+    # If there is no env specified for this machine, assume no conda activation is needed.
+    CACHED_CONDA_ENV = ""
+
+def get_local_conda_env():
+    """Return detected local conda env name, or '' if none (no activation needed)."""
     global CACHED_CONDA_ENV
-    if CACHED_CONDA_ENV:
-        return CACHED_CONDA_ENV
-
-    init_local_conda_env()
-
-    console.print("[yellow]Local conda env not found in workers.csv for this machine.[/yellow]")
-    console.print("Please enter the conda env name to use for running commands (not saved).")
-    env_name = ""
-    while not env_name:
-        env_name = Prompt.ask("Conda env name").strip()
-    CACHED_CONDA_ENV = env_name
-    return env_name
-
+    if CACHED_CONDA_ENV is None:
+        init_local_conda_env()
+    return CACHED_CONDA_ENV or ""
 
 def prompt_creds():
     if CACHED_CREDS is not None:
@@ -179,15 +170,20 @@ def run_script(script_name, args):
         console.print(f"[bold red]Missing script:[/bold red] {script_path}")
         return 1
 
-    env_name = prompt_local_conda_env()
-    conda_sh = '$HOME/miniconda3/etc/profile.d/conda.sh'
-    qenv = shlex.quote(env_name)
-    qscript = shlex.quote(str(script_path))
-    qargs = " ".join(shlex.quote(a) for a in args)
+    env_name = get_local_conda_env()
+    if env_name:
+        conda_sh = '$HOME/miniconda3/etc/profile.d/conda.sh'
+        qenv = shlex.quote(env_name)
+        qscript = shlex.quote(str(script_path))
+        qargs = " ".join(shlex.quote(a) for a in args)
 
-    # Run inside conda env so Ray/Python versions match the cluster.
-    bash_cmd = f'source {conda_sh} && conda activate {qenv} && python3 {qscript} {qargs}'.strip()
-    return subprocess.call(["bash", "-lc", bash_cmd], cwd=str(ROOT))
+        # Run inside conda env so Ray/Python versions match the cluster.
+        bash_cmd = f'source {conda_sh} && conda activate {qenv} && python3 {qscript} {qargs}'.strip()
+        return subprocess.call(["bash", "-lc", bash_cmd], cwd=str(ROOT))
+
+    # No env specified for this machine: run with current interpreter.
+    cmd = [sys.executable, str(script_path), *args]
+    return subprocess.call(cmd, cwd=str(ROOT))
 
 
 def menu_table(title, rows):
