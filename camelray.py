@@ -4,11 +4,8 @@ camelray.py
 Interactive terminal menu for managing the CAMEL Ray cluster scripts.
 """
 
-from __future__ import annotations
-
 import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 import termios
 import tty
@@ -26,29 +23,62 @@ ROOT = Path(__file__).resolve().parent
 BANNER_FILE = ROOT / "banner.txt"
 
 console = Console()
-CACHED_CREDS: Creds | None = None
-CACHED_CONDA_ENV: str | None = None
+CACHED_CREDS = None
+CACHED_CONDA_ENV = None
 
 
-@dataclass(frozen=True)
 class Creds:
-    username: str
-    password: str
+    def __init__(self, username, password):
+        self.username = username
+        self.password = password
 
 
-def read_banner() -> str:
+def read_banner():
     return BANNER_FILE.read_text(encoding="utf-8").rstrip("\n")
 
 
-def print_banner() -> None:
+def print_banner():
     banner = read_banner()
     console.clear()
     console.print(f"[bold cyan]{banner}[/bold cyan]")
     console.print()
 
-def init_env_creds() -> None:
+def print_network_info():
+    """
+    Print hostname + current IPs and warn if we're not on the expected 136.244.224.* subnet.
+    """
+    try:
+        host = socket.gethostname().strip()
+    except Exception:
+        host = "unknown"
+
+    ips = []
+    try:
+        out = subprocess.check_output(["hostname", "-I"], text=True).strip()
+        ips = [ip for ip in out.split() if ip]
+    except Exception:
+        ips = []
+
+    console.print(f"[dim]Host:[/dim] {host}")
+    console.print(f"[dim]IPs:[/dim]  {', '.join(ips) if ips else 'unknown'}")
+
+    ok_subnet = any(ip.startswith("136.244.224.") for ip in ips)
+    if not ok_subnet:
+        console.print("[yellow]Warning: not on expected subnet 136.244.224.*[/yellow]")
+    console.print()
+
+def print_main_menu_header():
+    """Render the main menu header (banner + network info + one-time notices)."""
+    print_banner()
+    print_network_info()
+    init_env_creds()
+    init_local_conda_env()
+
+def init_env_creds():
     """Load USERNAME/PASSWORD from .env once (in-memory only) and print a notice."""
     global CACHED_CREDS
+    if CACHED_CREDS is not None:
+        return
     env_defaults = ping_workers.load_env_defaults()
     default_user = (env_defaults.get("USERNAME") or "").strip()
     default_pass = (env_defaults.get("PASSWORD") or "").strip()
@@ -56,7 +86,7 @@ def init_env_creds() -> None:
         CACHED_CREDS = Creds(username=default_user, password=default_pass)
         console.print("[yellow]Credentials loaded from .env[/yellow]")
 
-def init_local_conda_env() -> None:
+def init_local_conda_env():
     """
     Try to detect the local conda env name from workers.csv for this machine.
     Caches it in-memory only.
@@ -87,7 +117,7 @@ def init_local_conda_env() -> None:
             CACHED_CONDA_ENV = env_name
             console.print(f"[yellow]Conda env detected from workers.csv: {env_name}[/yellow]\n")
 
-def prompt_local_conda_env() -> str:
+def prompt_local_conda_env():
     """
     Prompt once for the local conda env to use for running scripts that need Ray/Python.
     Never saved to disk.
@@ -107,7 +137,7 @@ def prompt_local_conda_env() -> str:
     return env_name
 
 
-def prompt_creds() -> Creds:
+def prompt_creds():
     if CACHED_CREDS is not None:
         return CACHED_CREDS
 
@@ -142,7 +172,7 @@ def prompt_creds() -> Creds:
     return Creds(username=username.strip(), password=password.strip())
 
 
-def run_script(script_name: str, args: list[str]) -> int:
+def run_script(script_name, args):
     """
     Run one of the repo's scripts as a child process, streaming output to the terminal.
     """
@@ -162,7 +192,7 @@ def run_script(script_name: str, args: list[str]) -> int:
     return subprocess.call(["bash", "-lc", bash_cmd], cwd=str(ROOT))
 
 
-def menu_table(title: str | None, rows: list[tuple[str, str]]) -> None:
+def menu_table(title, rows):
     table = Table(title=title or None, show_lines=False, box=None)
     table.add_column("#", style="cyan", no_wrap=True, justify="right")
     table.add_column("Action", style="white")
@@ -170,7 +200,7 @@ def menu_table(title: str | None, rows: list[tuple[str, str]]) -> None:
         table.add_row(k, label)
     console.print(table)
 
-def read_menu_choice(choices: list[str], prompt: str = "Select") -> str:
+def read_menu_choice(choices, prompt="Select"):
     """
     Read a single keypress (no Enter) and return it if it is in `choices`.
     Linux/Unix only (uses termios/tty).
@@ -198,12 +228,12 @@ def read_menu_choice(choices: list[str], prompt: str = "Select") -> str:
             pass
 
 
-def action_check_workers() -> None:
+def action_check_workers():
     creds = prompt_creds()
     run_script("ping_workers.py", ["--username", creds.username, "--password", creds.password])
 
 
-def action_stop_cluster() -> None:
+def action_stop_cluster():
     creds = prompt_creds()
     # ray_stop supports --workers selection; we keep it optional here.
     selectors = Prompt.ask("Optional worker selectors (comma-separated) [leave empty for all]", default="").strip()
@@ -213,7 +243,7 @@ def action_stop_cluster() -> None:
     run_script("ray_stop.py", args)
 
 
-def manage_cluster_menu() -> None:
+def manage_cluster_menu():
     while True:
         print_banner()
         menu_table(
@@ -240,7 +270,7 @@ def manage_cluster_menu() -> None:
             return
 
 
-def start_cluster_menu() -> None:
+def start_cluster_menu():
     while True:
         print_banner()
         menu_table(
@@ -268,11 +298,9 @@ def start_cluster_menu() -> None:
             return
 
 
-def main() -> None:
+def main():
     try:
-        print_banner()
-        init_env_creds()
-        init_local_conda_env()
+        print_main_menu_header()
 
         while True:
             menu_table(
@@ -296,8 +324,7 @@ def main() -> None:
 
             if pause_after:
                 Prompt.ask("\nPress Enter to return to menu", default="")
-            print_banner()
-            init_env_creds()
+            print_main_menu_header()
     except KeyboardInterrupt:
         # Exit immediately back to the shell (Ctrl-C).
         console.print("\n[dim]Exiting...[/dim]")
