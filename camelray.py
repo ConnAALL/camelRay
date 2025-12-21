@@ -20,7 +20,7 @@ from scripts import ping_workers
 
 
 ROOT = Path(__file__).resolve().parent
-BANNER_FILE = ROOT / "banner.txt"
+BANNER_FILE = ROOT / "assets" / "banner.txt"
 
 console = Console()
 CACHED_CREDS = None
