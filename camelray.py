@@ -233,7 +233,8 @@ def read_menu_choice(choices, prompt="Select"):
     Read a single keypress (no Enter) and return it if it is in `choices`.
     Linux/Unix only (uses termios/tty).
     """
-    choices_set = set(choices)
+    # Normalize to lower-case so we can treat 'B' the same as 'b', etc.
+    choices_set = {c.lower() for c in choices}
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
     try:
@@ -242,7 +243,7 @@ def read_menu_choice(choices, prompt="Select"):
             sys.stdout.flush()
             # cbreak keeps signal handling (Ctrl-C) working, unlike raw mode.
             tty.setcbreak(fd)
-            ch = sys.stdin.read(1)
+            ch = sys.stdin.read(1).lower()
             # restore cooked mode so echo/newlines behave normally for printing
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
             console.print(ch)  # echo selection + newline
@@ -280,10 +281,10 @@ def manage_cluster_menu():
                 ("1", "View Ray Workers"),
                 ("2", "Start cluster"),
                 ("3", "Stop Cluster"),
-                ("4", "Back"),
+                ("b", "Back"),
             ],
         )
-        choice = read_menu_choice(["1", "2", "3", "4"])
+        choice = read_menu_choice(["1", "2", "3", "b"])
         if choice == "1":
             run_script("ray_diagnosis.py", [])
             Prompt.ask("\nPress Enter to continue", default="")
@@ -306,10 +307,10 @@ def start_cluster_menu():
             [
                 ("1", "From scratch (will STOP existing cluster first)"),
                 ("2", "Prune / reconnect (only start Ray where it's missing)"),
-                ("3", "Back"),
+                ("b", "Back"),
             ],
         )
-        choice = read_menu_choice(["1", "2", "3"])
+        choice = read_menu_choice(["1", "2", "b"])
         if choice == "1":
             console.print("[yellow]From scratch will stop any existing Ray processes and start a fresh cluster.[/yellow]\n")
             creds = prompt_creds()
@@ -336,18 +337,18 @@ def main():
                 [
                     ("1", "Ping workers"),
                     ("2", "Manage Cluster"),
-                    ("3", "Exit"),
+                    ("e", "Exit"),
                 ],
             )
 
-            choice = read_menu_choice(["1", "2", "3"])
+            choice = read_menu_choice(["1", "2", "e"])
             pause_after = True
             if choice == "1":
                 action_check_workers()
             elif choice == "2":
                 manage_cluster_menu()
                 pause_after = False  # submenu handles its own pauses; Back should return immediately
-            elif choice == "3":
+            elif choice == "e":
                 return
 
             if pause_after:
