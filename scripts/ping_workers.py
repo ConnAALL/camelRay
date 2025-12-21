@@ -15,8 +15,7 @@ from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
 
-WORKER_FILE = Path(__file__).with_name("workers.csv")  # File that has the list of workers and their information
-ENV_FILE = Path(__file__).with_name(".env")  # File that has the credentials for the SSH connection
+from .paths import WORKER_FILE, ENV_FILE
 
 def load_env_defaults():
     """Load username/password information from the .env file if it exists."""

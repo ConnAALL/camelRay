@@ -17,7 +17,8 @@ import sys
 import yaml
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from ping_workers import load_env_defaults, normalize, load_workers, WORKER_FILE, ENV_FILE
+from .ping_workers import load_env_defaults, normalize, load_workers
+from .paths import CONFIG_FILE, WORKER_FILE, ENV_FILE
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.theme import Theme
@@ -51,8 +52,6 @@ def short_text(value: str, max_len: int) -> str:
     if max_len <= 3:
         return text[:max_len]
     return text[: max_len - 3] + "..."
-
-CONFIG_FILE = Path(__file__).with_name("config.yml")
 
 def load_config():
     """Load configuration from config.yml file."""

@@ -13,8 +13,9 @@ import os
 import shlex
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import paramiko
-from ping_workers import WORKER_FILE, load_workers, normalize, parse_args
-from ray_setup import wrap_with_conda_env
+from .paths import WORKER_FILE
+from .ping_workers import load_workers, normalize, parse_args
+from .ray_setup import wrap_with_conda_env
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table

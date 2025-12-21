@@ -14,14 +14,14 @@ import yaml
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 import paramiko
-from ping_workers import WORKER_FILE, ENV_FILE, load_env_defaults, load_workers, normalize
-from ray_setup import wrap_with_conda_env
-from ray_diagnosis import short_text, run_remote
+from .paths import WORKER_FILE, ENV_FILE, CONFIG_FILE
+from .ping_workers import load_env_defaults, load_workers, normalize
+from .ray_setup import wrap_with_conda_env
+from .ray_diagnosis import short_text, run_remote
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
-CONFIG_FILE = Path(__file__).with_name("config.yml")
 console = Console()
 
 _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")

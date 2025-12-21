@@ -16,7 +16,7 @@ from rich.console import Console
 from rich.prompt import Prompt
 from rich.table import Table
 
-import ping_workers
+from scripts import ping_workers
 
 
 ROOT = Path(__file__).resolve().parent
@@ -199,24 +199,21 @@ def run_script(script_name, args):
     """
     Run one of the repo's scripts as a child process, streaming output to the terminal.
     """
-    script_path = ROOT / script_name
-    if not script_path.exists():
-        console.print(f"[bold red]Missing script:[/bold red] {script_path}")
-        return 1
+    stem = Path(script_name).stem
+    module = f"scripts.{stem}"
 
     env_name = get_local_conda_env()
     if env_name:
         conda_sh = '$HOME/miniconda3/etc/profile.d/conda.sh'
         qenv = shlex.quote(env_name)
-        qscript = shlex.quote(str(script_path))
         qargs = " ".join(shlex.quote(a) for a in args)
 
         # Run inside conda env so Ray/Python versions match the cluster.
-        bash_cmd = f'source {conda_sh} && conda activate {qenv} && python3 {qscript} {qargs}'.strip()
+        bash_cmd = f'source {conda_sh} && conda activate {qenv} && python3 -m {shlex.quote(module)} {qargs}'.strip()
         return subprocess.call(["bash", "-lc", bash_cmd], cwd=str(ROOT))
 
     # No env specified for this machine: run with current interpreter.
-    cmd = [sys.executable, str(script_path), *args]
+    cmd = [sys.executable, "-m", module, *args]
     return subprocess.call(cmd, cwd=str(ROOT))
 
 
@@ -259,7 +256,7 @@ def read_menu_choice(choices, prompt="Select"):
 
 def action_check_workers():
     creds = prompt_creds()
-    run_script("ping_workers.py", ["--username", creds.username, "--password", creds.password])
+    run_script("ping_workers", ["--username", creds.username, "--password", creds.password])
 
 
 def action_stop_cluster():
@@ -269,7 +266,7 @@ def action_stop_cluster():
     args = ["--username", creds.username, "--password", creds.password]
     if selectors:
         args += ["--workers", selectors]
-    run_script("ray_stop.py", args)
+    run_script("ray_stop", args)
 
 
 def manage_cluster_menu():
@@ -286,7 +283,7 @@ def manage_cluster_menu():
         )
         choice = read_menu_choice(["1", "2", "3", "b"])
         if choice == "1":
-            run_script("ray_diagnosis.py", [])
+            run_script("ray_diagnosis", [])
             Prompt.ask("\nPress Enter to continue", default="")
             print_banner()
         elif choice == "2":
@@ -314,13 +311,13 @@ def start_cluster_menu():
         if choice == "1":
             console.print("[yellow]From scratch will stop any existing Ray processes and start a fresh cluster.[/yellow]\n")
             creds = prompt_creds()
-            run_script("ray_setup.py", ["--username", creds.username, "--password", creds.password])
+            run_script("ray_setup", ["--username", creds.username, "--password", creds.password])
             Prompt.ask("\nPress Enter to continue", default="")
             print_banner()
         elif choice == "2":
             console.print("[yellow]Prune mode will NOT stop existing Ray processes; it only starts Ray where it's not running.[/yellow]\n")
             creds = prompt_creds()
-            run_script("ray_setup.py", ["--username", creds.username, "--password", creds.password, "--prune"])
+            run_script("ray_setup", ["--username", creds.username, "--password", creds.password, "--prune"])
             Prompt.ask("\nPress Enter to continue", default="")
             print_banner()
         else:
