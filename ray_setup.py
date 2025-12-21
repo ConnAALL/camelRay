@@ -2,7 +2,7 @@
 Setup the ray cluster on the workers. 
 
 It goes through each worker in the workers.csv file and starts the ray cluster on the workers.
-It uses the SSH credentials in .env file and the config.yaml file to setup the ray cluster with the head node.
+It uses the SSH credentials in .env file and the config.yml file to setup the ray cluster with the head node.
 By default, it does not use the main grid computer as a worker to not overload the jump-host.
 
 If you would like to start the ray cluster on the machines that are not running ray, you can use the --prune option.
@@ -52,10 +52,10 @@ def short_text(value: str, max_len: int) -> str:
         return text[:max_len]
     return text[: max_len - 3] + "..."
 
-CONFIG_FILE = Path(__file__).with_name("config.yaml")
+CONFIG_FILE = Path(__file__).with_name("config.yml")
 
 def load_config():
-    """Load configuration from config.yaml file."""
+    """Load configuration from config.yml file."""
     if not CONFIG_FILE.exists():
         raise FileNotFoundError(f"Config file not found: {CONFIG_FILE}")
     
@@ -65,12 +65,12 @@ def load_config():
     return config
 
 def get_default_head_ip():
-    """Get DEFAULT_HEAD_IP from config.yaml."""
+    """Get DEFAULT_HEAD_IP from config.yml."""
     config = load_config()
     return config.get("DEFAULT_HEAD_IP")
 
 def get_grid_head_ip():
-    """Get GRID_HEAD_IP from config.yaml."""
+    """Get GRID_HEAD_IP from config.yml."""
     config = load_config()
     return config.get("GRID_HEAD_IP")
 

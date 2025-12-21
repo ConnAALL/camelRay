@@ -2,7 +2,7 @@
 Script that stops the ray cluster on the workers.
 
 It goes through each worker in the workers.csv file and stops the ray cluster on the workers.
-It uses the SSH credentials in .env file and the config.yaml file to stop the ray cluster on the workers.
+It uses the SSH credentials in .env file and the config.yml file to stop the ray cluster on the workers.
 
 To stop specific workers, you can use the --workers option to specify the workers to stop.
 """
@@ -21,7 +21,7 @@ from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
-CONFIG_FILE = Path(__file__).with_name("config.yaml")
+CONFIG_FILE = Path(__file__).with_name("config.yml")
 console = Console()
 
 _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -43,7 +43,7 @@ def clean_details(value: str, max_len: int = 200) -> str:
     return short_text(text, max_len)
 
 def get_grid_head_ip():
-    """Get GRID_HEAD_IP from config.yaml."""
+    """Get GRID_HEAD_IP from config.yml."""
     if not CONFIG_FILE.exists():
         raise FileNotFoundError(f"Config file not found: {CONFIG_FILE}")
     

@@ -6,7 +6,7 @@ import yaml
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
-CONFIG_FILE = Path(__file__).with_name("config.yaml")  # Load the configuration file
+CONFIG_FILE = Path(__file__).with_name("config.yml")  # Load the configuration file
 
 def load_config():
     """Load the configuration file"""
