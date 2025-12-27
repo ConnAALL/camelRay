@@ -150,6 +150,8 @@ def print_results_table(results: list[dict]):
     table.add_column("GPU", style="white")
     table.add_column("SUCCESS", justify="center")
 
+    total_cores = 0
+    total_computers = 0
     for r in results:
         success = "YES" if r["status"] == "ok" else "NO"
         style = "green" if r["status"] == "ok" else "red"
@@ -163,6 +165,23 @@ def print_results_table(results: list[dict]):
             success,
             style=style,
         )
+        # Only count working computers and their cores
+        if r["status"] == "ok":
+            total_computers += 1
+            if isinstance(r["cores"], (int, str)) and str(r["cores"]).isdigit():
+                total_cores += int(r["cores"])
+
+    # Add total row
+    table.add_row(
+        "[bold]TOTAL[/bold]",
+        f"[bold]{total_computers} computers[/bold]",
+        "",
+        "",
+        f"[bold]{total_cores}[/bold]",
+        "",
+        "",
+        style="bold yellow",
+    )
 
     Console().print(table)
 
