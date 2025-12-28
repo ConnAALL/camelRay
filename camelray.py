@@ -268,6 +268,21 @@ def action_stop_cluster():
         args += ["--workers", selectors]
     run_script("ray_stop", args)
 
+def action_restart_cluster():
+    """
+    Restart the Ray cluster by stopping everything and then starting from scratch.
+    """
+    console.print("[yellow]Restart will STOP the existing cluster and then start a fresh one.[/yellow]\n")
+    creds = prompt_creds()
+
+    stop_rc = run_script("ray_stop", ["--username", creds.username, "--password", creds.password])
+    if stop_rc != 0:
+        console.print(f"[yellow]Warning: ray_stop exited with code {stop_rc}. Continuing with restart...[/yellow]\n")
+
+    start_rc = run_script("ray_setup", ["--username", creds.username, "--password", creds.password])
+    if start_rc != 0:
+        console.print(f"[red]ray_setup exited with code {start_rc}[/red]\n")
+
 
 def manage_cluster_menu():
     while True:
@@ -278,10 +293,11 @@ def manage_cluster_menu():
                 ("1", "View Ray Workers"),
                 ("2", "Start cluster"),
                 ("3", "Stop Cluster"),
+                ("4", "Restart Cluster"),
                 ("b", "Back"),
             ],
         )
-        choice = read_menu_choice(["1", "2", "3", "b"])
+        choice = read_menu_choice(["1", "2", "3", "4", "b"])
         if choice == "1":
             run_script("ray_diagnosis", [])
             Prompt.ask("\nPress Enter to continue", default="")
@@ -290,6 +306,10 @@ def manage_cluster_menu():
             start_cluster_menu()
         elif choice == "3":
             action_stop_cluster()
+            Prompt.ask("\nPress Enter to continue", default="")
+            print_banner()
+        elif choice == "4":
+            action_restart_cluster()
             Prompt.ask("\nPress Enter to continue", default="")
             print_banner()
         else:
