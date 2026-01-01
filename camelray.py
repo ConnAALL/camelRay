@@ -178,6 +178,11 @@ def prompt_creds():
 
     have_env_creds = bool(default_user and default_pass)
 
+    # If .env exists and has both credentials, use them automatically without prompting
+    if env_file_exists and have_env_creds:
+        return Creds(username=default_user, password=default_pass)
+
+    # Otherwise, prompt for credentials
     if not env_file_exists or not have_env_creds:
         console.print("[yellow]No SSH credentials found in `.env`.[/yellow]")
         console.print("You can either enter them now (they will NOT be saved), or add them to `.env` yourself:")
@@ -193,13 +198,6 @@ def prompt_creds():
         while not password:
             password = Prompt.ask("SSH password", password=True).strip()
         return Creds(username=username, password=password)
-
-    # .env exists and has both USERNAME/PASSWORD: allow Enter to use them, but don't display them.
-    username_in = Prompt.ask("SSH username (press Enter to use .env)", default="").strip()
-    password_in = Prompt.ask("SSH password (press Enter to use .env)", password=True, default="").strip()
-    username = username_in or default_user
-    password = password_in or default_pass
-    return Creds(username=username.strip(), password=password.strip())
 
 
 def run_script(script_name, args):
