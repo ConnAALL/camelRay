@@ -45,53 +45,58 @@ def print_banner():
     console.print(f"[bold cyan]{banner}[/bold cyan]")
     console.print()
 
-def print_network_info():
+def get_local_host_and_ips():
     """
-    Print hostname + current IPs and warn if we're not on the expected 136.244.224.* subnet.
+    Return (hostname, ips) for the current machine.
+
+    `ips` is a best-effort list of IPv4 addresses (loopback excluded when possible).
     """
     try:
         host = socket.gethostname().strip()
     except Exception:
         host = "unknown"
 
-    def _get_ips():
-        system = platform.system().lower()
-        ips = []
+    system = platform.system().lower()
+    ips = []
 
-        if system == "linux":
-            try:
-                out = subprocess.check_output(["hostname", "-I"], text=True).strip()
-                ips = [ip for ip in out.split() if ip]
-            except Exception:
-                ips = []
-        elif system == "darwin":
-            # macOS doesn't support `hostname -I`. Parse ifconfig output.
-            try:
-                out = subprocess.check_output(["ifconfig"], text=True, stderr=subprocess.STDOUT)
-                # capture inet IPv4 addresses, excluding loopback
-                ips = [m.group(1) for m in re.finditer(r"\binet\s+(\d+\.\d+\.\d+\.\d+)\b", out)]
-                ips = [ip for ip in ips if ip != "127.0.0.1"]
-            except Exception:
-                ips = []
-        elif system == "windows":
-            # Parse ipconfig output for IPv4 addresses.
-            try:
-                out = subprocess.check_output(["ipconfig"], text=True, stderr=subprocess.STDOUT)
-                ips = [m.group(1) for m in re.finditer(r"IPv4 Address[^\d]*(\d+\.\d+\.\d+\.\d+)", out)]
-                ips = [ip for ip in ips if ip != "127.0.0.1"]
-            except Exception:
-                ips = []
-        else:
-            # Fallback: best-effort from hostname resolution.
-            try:
-                infos = socket.getaddrinfo(host, None)
-                ips = list({info[4][0] for info in infos if info and info[4]})
-            except Exception:
-                ips = []
+    if system == "linux":
+        try:
+            out = subprocess.check_output(["hostname", "-I"], text=True).strip()
+            ips = [ip for ip in out.split() if ip]
+        except Exception:
+            ips = []
+    elif system == "darwin":
+        # macOS doesn't support `hostname -I`. Parse ifconfig output.
+        try:
+            out = subprocess.check_output(["ifconfig"], text=True, stderr=subprocess.STDOUT)
+            # capture inet IPv4 addresses, excluding loopback
+            ips = [m.group(1) for m in re.finditer(r"\binet\s+(\d+\.\d+\.\d+\.\d+)\b", out)]
+            ips = [ip for ip in ips if ip != "127.0.0.1"]
+        except Exception:
+            ips = []
+    elif system == "windows":
+        # Parse ipconfig output for IPv4 addresses.
+        try:
+            out = subprocess.check_output(["ipconfig"], text=True, stderr=subprocess.STDOUT)
+            ips = [m.group(1) for m in re.finditer(r"IPv4 Address[^\d]*(\d+\.\d+\.\d+\.\d+)", out)]
+            ips = [ip for ip in ips if ip != "127.0.0.1"]
+        except Exception:
+            ips = []
+    else:
+        # Fallback: best-effort from hostname resolution.
+        try:
+            infos = socket.getaddrinfo(host, None)
+            ips = list({info[4][0] for info in infos if info and info[4]})
+        except Exception:
+            ips = []
 
-        return ips
+    return host, ips
 
-    ips = _get_ips()
+def print_network_info():
+    """
+    Print hostname + current IPs and warn if we're not on the expected 136.244.224.* subnet.
+    """
+    host, ips = get_local_host_and_ips()
 
     console.print(f"[dim]Host:[/dim] {host}")
     console.print(f"[dim]IPs:[/dim]  {', '.join(ips) if ips else 'unknown'}")
