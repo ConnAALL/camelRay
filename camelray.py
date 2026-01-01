@@ -223,6 +223,24 @@ def run_script(script_name, args):
     cmd = [sys.executable, "-m", module, *args]
     return subprocess.call(cmd, cwd=str(ROOT))
 
+def run_local_pyfile(pyfile: Path, args):
+    """
+    Run a repo-local .py file as a child process, streaming output to the terminal.
+    Uses the detected local conda env when available (to match Ray/Python versions).
+    """
+    pyfile = Path(pyfile)
+    env_name = get_local_conda_env()
+    if env_name:
+        conda_sh = '$HOME/miniconda3/etc/profile.d/conda.sh'
+        qenv = shlex.quote(env_name)
+        qfile = shlex.quote(str(pyfile))
+        qargs = " ".join(shlex.quote(a) for a in args)
+        bash_cmd = f"source {conda_sh} && conda activate {qenv} && python3 {qfile} {qargs}".strip()
+        return subprocess.call(["bash", "-lc", bash_cmd], cwd=str(ROOT))
+
+    cmd = [sys.executable, str(pyfile), *args]
+    return subprocess.call(cmd, cwd=str(ROOT))
+
 
 def menu_table(title, rows):
     table = Table(title=title or None, show_lines=False, box=None)
@@ -264,6 +282,10 @@ def read_menu_choice(choices, prompt="Select"):
 def action_check_workers():
     creds = prompt_creds()
     run_script("ping_workers", ["--username", creds.username, "--password", creds.password])
+
+def action_access_dashboard():
+    # accessDashboard.py handles its own credential prompting + optional SSH tunneling.
+    run_local_pyfile(ROOT / "accessDashboard.py", [])
 
 
 def action_stop_cluster():
@@ -361,17 +383,20 @@ def main():
                 [
                     ("1", "Ping workers"),
                     ("2", "Manage Cluster"),
+                    ("3", "Access Dashboard"),
                     ("e", "Exit"),
                 ],
             )
 
-            choice = read_menu_choice(["1", "2", "e"])
+            choice = read_menu_choice(["1", "2", "3", "e"])
             pause_after = True
             if choice == "1":
                 action_check_workers()
             elif choice == "2":
                 manage_cluster_menu()
                 pause_after = False  # submenu handles its own pauses; Back should return immediately
+            elif choice == "3":
+                action_access_dashboard()
             elif choice == "e":
                 return
 
