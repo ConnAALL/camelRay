@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """
 Interactive terminal menu for managing the Camel Ray cluster.
 """
