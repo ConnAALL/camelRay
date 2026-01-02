@@ -1,3 +1,3 @@
 # Configuration for Ray cluster management
-DEFAULT_HEAD_IP: "136.244.224.234"  # This is the IP of the machine that will be the head of the ray cluster
+DEFAULT_HEAD_IP: "136.244.224.45"  # This is the IP of the machine that will be the head of the ray cluster
 GRID_HEAD_IP: "136.244.224.30"  # This is the IP of the grid computer. It is not used as a worker to not overload to jump-host
