@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/camel_ray.png" width="500">
+  <img src="assets/banner.png" width="500">
 </p>
 
 # Camel Ray
