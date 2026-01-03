@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/camel_ray.png" width="500">
+</p>
+
 # Camel Ray
 
 Helper scripts for managing the Camel Ray compute cluster. 
