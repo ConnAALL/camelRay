@@ -11,11 +11,18 @@ It goes through each worker in the workers.csv file if:
 
 import os
 import shlex
+import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import paramiko
-from .paths import WORKER_FILE
-from .ping_workers import load_workers, normalize, parse_args
-from .ray_setup import wrap_with_conda_env
+from pathlib import Path
+if __package__ in {None, ""}:
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+from scripts.paths import WORKER_FILE
+from scripts.ping_workers import load_workers, normalize, parse_args
+from scripts.ray_setup import wrap_with_conda_env
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table

@@ -7,6 +7,7 @@ This assumes you are running this script on a machine that is has an IP address 
 import argparse
 import csv
 import os
+import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import paramiko
 from pathlib import Path
@@ -15,7 +16,12 @@ from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
 
-from .paths import WORKER_FILE, ENV_FILE
+if __package__ in {None, ""}:
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+from scripts.paths import WORKER_FILE, ENV_FILE
 
 def load_env_defaults():
     """Load username/password information from the .env file if it exists."""

@@ -1,12 +1,18 @@
 """Simple script to print the IP address and the hostname of each worker in the cluster"""
 
 import socket
+import sys
 from pathlib import Path
 import yaml
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
-from .paths import CONFIG_FILE
+if __package__ in {None, ""}:
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+from scripts.paths import CONFIG_FILE
 
 def load_config():
     """Load the configuration file"""

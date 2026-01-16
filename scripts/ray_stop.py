@@ -10,14 +10,21 @@ To stop specific workers, you can use the --workers option to specify the worker
 import argparse
 import os
 import re
+import sys
 import yaml
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 import paramiko
-from .paths import WORKER_FILE, ENV_FILE, CONFIG_FILE
-from .ping_workers import load_env_defaults, load_workers, normalize
-from .ray_setup import wrap_with_conda_env
-from .ray_diagnosis import short_text, run_remote
+
+if __package__ in {None, ""}:
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+from scripts.paths import WORKER_FILE, ENV_FILE, CONFIG_FILE
+from scripts.ping_workers import load_env_defaults, load_workers, normalize
+from scripts.ray_setup import wrap_with_conda_env
+from scripts.ray_diagnosis import short_text, run_remote
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table

@@ -17,8 +17,14 @@ import sys
 import yaml
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from .ping_workers import load_env_defaults, normalize, load_workers
-from .paths import CONFIG_FILE, WORKER_FILE, ENV_FILE
+
+if __package__ in {None, ""}:
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+from scripts.ping_workers import load_env_defaults, normalize, load_workers
+from scripts.paths import CONFIG_FILE, WORKER_FILE, ENV_FILE
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.theme import Theme
