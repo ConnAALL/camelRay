@@ -71,6 +71,7 @@ def process_gpu_output(out):
 def ssh_check(host, user, password):
     """Run the SSH check and get hardware information if possible."""
     cores = "unknown"
+    ram_gb = "unknown"
     gpu = ("unknown", "unknown")
     try:
         # Create the SSH client
@@ -94,6 +95,11 @@ def ssh_check(host, user, password):
             cores_output = stdout.read().decode().strip()
             if cores_output.isdigit():
                 cores = cores_output
+            # Fetch total RAM from /proc/meminfo (kB) and convert to GB
+            _, stdout, _ = ssh.exec_command(r"""awk '/MemTotal/ {printf "%.1f", $2/1024/1024}' /proc/meminfo 2>/dev/null || true""")
+            ram_output = stdout.read().decode().strip()
+            if ram_output:
+                ram_gb = ram_output
             _, stdout, _ = ssh.exec_command("lspci | grep -i vga | head -n 1 || true")
             gpu = process_gpu_output(stdout.read().decode().strip())
 
@@ -102,16 +108,16 @@ def ssh_check(host, user, password):
 
         # If the result is 'ok', the connection is successful
         if result == "ok":
-            return "ok", "", cores, gpu
+            return "ok", "", cores, ram_gb, gpu
         else:
-            return "failed", f"Unexpected output: {result}", cores, gpu
+            return "failed", f"Unexpected output: {result}", cores, ram_gb, gpu
 
     except paramiko.AuthenticationException:
-        return "failed", "Authentication failed.", cores, gpu
+        return "failed", "Authentication failed.", cores, ram_gb, gpu
     except paramiko.SSHException as e:
-        return "failed", f"SSH connection failed: {str(e)}", cores, gpu
+        return "failed", f"SSH connection failed: {str(e)}", cores, ram_gb, gpu
     except Exception as e:
-        return "failed", f"Error: {str(e)}", cores, gpu
+        return "failed", f"Error: {str(e)}", cores, ram_gb, gpu
 
 def ping_one_worker(worker: dict, default_username: str, default_password: str) -> dict:
     """
@@ -125,7 +131,7 @@ def ping_one_worker(worker: dict, default_username: str, default_password: str) 
     username = normalize(worker.get("username")) or default_username
     password = normalize(worker.get("password")) or default_password
 
-    status, details, cores, gpu = ssh_check(host_ip, username, password)
+    status, details, cores, ram_gb, gpu = ssh_check(host_ip, username, password)
     gpu_raw, gpu_short = gpu if isinstance(gpu, tuple) and len(gpu) == 2 else ("", "")
     return {
         "room": room,
@@ -135,6 +141,7 @@ def ping_one_worker(worker: dict, default_username: str, default_password: str) 
         "status": status,
         "details": details,
         "cores": cores,
+        "ram_gb": ram_gb,
         "gpu_raw": gpu_raw,
         "gpu_short": gpu_short,
     }
@@ -147,6 +154,7 @@ def print_results_table(results: list[dict]):
     table.add_column("IP-ADDRESS", style="white")
     table.add_column("MONITOR", style="white")
     table.add_column("CORES", justify="right")
+    table.add_column("RAM(GB)", justify="right")
     table.add_column("GPU", style="white")
     table.add_column("SUCCESS", justify="center")
 
@@ -161,6 +169,7 @@ def print_results_table(results: list[dict]):
             r["ip"],
             r["monitor"],
             str(r["cores"]),
+            str(r.get("ram_gb", "unknown")),
             r["gpu_short"],
             success,
             style=style,
@@ -178,6 +187,7 @@ def print_results_table(results: list[dict]):
         "",
         "",
         f"[bold]{total_cores}[/bold]",
+        "",
         "",
         "",
         style="bold yellow",
@@ -233,6 +243,7 @@ def ping_workers():
                             "status": "failed",
                             "details": f"Worker task crashed: {exc}",
                             "cores": "unknown",
+                            "ram_gb": "unknown",
                             "gpu_raw": "",
                             "gpu_short": "",
                         }
