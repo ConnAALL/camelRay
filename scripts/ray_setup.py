@@ -59,6 +59,26 @@ def short_text(value: str, max_len: int) -> str:
         return text[:max_len]
     return text[: max_len - 3] + "..."
 
+def worker_in_cluster(worker: dict) -> bool:
+    """
+    Return True if worker should be added to the Ray cluster.
+
+    Backwards compatible behavior:
+    - missing/blank `in_cluster` => treated as 1 (in cluster)
+    - `0`/falsey values => not in cluster
+    """
+    raw = normalize(worker.get("in_cluster"))
+    if not raw:
+        return True
+    lowered = raw.lower()
+    if lowered in {"0", "false", "no", "n", "off"}:
+        return False
+    try:
+        return int(raw) != 0
+    except Exception:
+        # If it's some unexpected non-empty value, default to "in cluster"
+        return True
+
 def load_config():
     """Load configuration from config.yml file."""
     if not CONFIG_FILE.exists():
@@ -243,6 +263,15 @@ def setup_worker_task(worker: dict, default_user: str, default_password: str, he
     conda_env = normalize(worker.get("env"))
 
     try:
+        if not worker_in_cluster(worker):
+            return {
+                "room": room,
+                "host": host,
+                "hostname": hostname,
+                "monitor": monitor,
+                "status": "skipped",
+                "details": "in_cluster=0; skipped",
+            }
         if prune:
             running = ray_process_state(host, user, password)
             if running != "none":
@@ -280,6 +309,7 @@ def setup_workers(workers, default_user, default_password, head_ip, port, prune=
         console=console,
         transient=False,
     ) as progress:
+        skipped_idxs: set[int] = set()
         for idx, w in enumerate(targets):
             room = normalize(w.get("room"))
             host = normalize(w.get("ip-address"))
@@ -289,38 +319,59 @@ def setup_workers(workers, default_user, default_password, head_ip, port, prune=
             label = escape(f"[{room}] {base_label}") if room else base_label
             task_ids[idx] = progress.add_task("queued", total=1, host=label)
 
-        with ProcessPoolExecutor(max_workers=pool_size) as executor:
-            futures = {}
-            for idx, w in enumerate(targets):
-                progress.update(task_ids[idx], description="running")
-                futures[executor.submit(setup_worker_task, w, default_user, default_password, head_ip, port, prune)] = idx
+        # Pre-skip workers with in_cluster=0, but still show them in the progress UI.
+        for idx, w in enumerate(targets):
+            if worker_in_cluster(w):
+                continue
+            skipped_idxs.add(idx)
+            room = normalize(w.get("room"))
+            results_by_idx[idx] = {
+                "room": room,
+                "host": normalize(w.get("ip-address")),
+                "hostname": normalize(w.get("hostname")),
+                "monitor": normalize(w.get("monitor-name")),
+                "status": "skipped",
+                "details": "in_cluster=0; skipped",
+            }
+            progress.update(task_ids[idx], description="[yellow]skipped[/yellow] in_cluster=0", completed=1)
 
-            for future in as_completed(futures):
-                idx = futures[future]
-                try:
-                    results_by_idx[idx] = future.result()
-                except Exception as exc:
+        to_run = [idx for idx in range(len(targets)) if idx not in skipped_idxs]
+        if to_run:
+            # Only size the pool for the workers we will actually run.
+            pool_size = min(len(to_run), max_procs)
+            with ProcessPoolExecutor(max_workers=pool_size) as executor:
+                futures = {}
+                for idx in to_run:
                     w = targets[idx]
-                    room = normalize(w.get("room"))
-                    results_by_idx[idx] = {
-                        "room": room,
-                        "host": normalize(w.get("ip-address")),
-                        "hostname": normalize(w.get("hostname")),
-                        "monitor": normalize(w.get("monitor-name")),
-                        "status": "failed",
-                        "details": f"Worker task crashed: {exc}",
-                    }
+                    progress.update(task_ids[idx], description="running")
+                    futures[executor.submit(setup_worker_task, w, default_user, default_password, head_ip, port, prune)] = idx
 
-                r = results_by_idx[idx]
-                status = r["status"]
-                details = short_text(r.get("details", ""), 120)
-                if status == "ok":
-                    desc = "[green]ok[/green]"
-                elif status == "skipped":
-                    desc = f"[yellow]skipped[/yellow] {details}".rstrip()
-                else:
-                    desc = f"[red]failed[/red] {details}".rstrip()
-                progress.update(task_ids[idx], description=desc, completed=1)
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    try:
+                        results_by_idx[idx] = future.result()
+                    except Exception as exc:
+                        w = targets[idx]
+                        room = normalize(w.get("room"))
+                        results_by_idx[idx] = {
+                            "room": room,
+                            "host": normalize(w.get("ip-address")),
+                            "hostname": normalize(w.get("hostname")),
+                            "monitor": normalize(w.get("monitor-name")),
+                            "status": "failed",
+                            "details": f"Worker task crashed: {exc}",
+                        }
+
+                    r = results_by_idx[idx]
+                    status = r["status"]
+                    details = short_text(r.get("details", ""), 120)
+                    if status == "ok":
+                        desc = "[green]ok[/green]"
+                    elif status == "skipped":
+                        desc = f"[yellow]skipped[/yellow] {details}".rstrip()
+                    else:
+                        desc = f"[red]failed[/red] {details}".rstrip()
+                    progress.update(task_ids[idx], description=desc, completed=1)
 
     results = [results_by_idx[i] for i in range(len(targets))]
     counts = {"ok": 0, "failed": 0, "skipped": 0}
