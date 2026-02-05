@@ -39,6 +39,6 @@ room,hostname,ip-address,monitor-name,username,password,env,in_cluster
 210,NL214-Lin7998,136.244.224.41,bandit,,,,1
 209,mega-knight,136.244.224.136,mega_knight,mega_knight,password,atarienv,1
 209,vector,136.244.224.37,vector,vector,password,atarienv,1
-209,usr-Precision-Tower-7910,136.244.224.134,roman,usr,password,atarienv,1
+209,usr-Precision-Tower-7910,136.244.224.134,roman,usr,password,atarienv,0
 209,NL216-Lin110088,136.244.224.33,elf,elf,password,atarienv,1
-209,trx-TRX50-AERO-D,136.244.224.45,threadripper,trx,password,atarienv,1
+209,trx-TRX50-AERO-D,136.244.224.45,threadripper,trx,password,atarienv,0
